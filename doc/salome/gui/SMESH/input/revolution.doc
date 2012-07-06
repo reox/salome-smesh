@@ -1,0 +1,84 @@
+/*!
+
+\page revolution_page Revolution
+
+\n Revolution is a type of surface meshing by generation from
+discretized lines. It is used to build mesh elements of plus one
+dimension than the swept ones. Each swept 1D element produces one or
+more quadrangles (or triangles if one node of a rotated element lays
+on the revolution axis).
+
+<em>To apply revolution:</em>
+<ol>
+<li>From the \b Modification menu choose the \b Revolution item or click
+<em>"Revolution"</em> button in the toolbar.
+
+\image html image92.png
+<center><em>"Revolution" button</em></center>
+
+The following dialog common for line and planar elements will appear:
+
+\image html revolution1.png
+
+</li>
+
+<li>
+In this dialog you should specify:
+<ul>
+<li>the type of elements which will be extruded (1D or 2D),</li>
+<li>specify the IDs of the elements which will be revolved:
+
+
+<ul>
+<li><b>Select the whole mesh, submesh or group</b> activating this
+checkbox; or</li>
+<li>choose mesh elements with the mouse in the 3D Viewer. It is
+possible to select a whole area with a mouse frame; or</li> 
+<li>input the element IDs directly in <b>ID Elements</b> field. The selected elements will be highlighted in the
+viewer; or</li>
+<li>apply Filters. <b>Set filter</b> button allows to apply a filter to the selection of elements. See more
+about filters in the \ref selection_filter_library_page "Selection filter library" page.</li>
+</ul>
+</li>
+
+<li>specify the axis of revolution:
+<ul>
+<li>specify the cooordinates of the start \b Point of the vector of revolution;</li>
+<li>specify the \b Vector of revolution through the coordinates of its
+end point with respect to the coordinates of the start
+point. Alternatively, it is possible to specify the vector through the
+normal to the selected face.</li>
+</ul>
+</li>
+
+<li>specify the angle of revolution and the number of revolution steps,</li>
+<ul> <li> Angle by Step - the elements are extruded by the specified angle at each step (i.e. for Angle=30 and Number of Steps=2, the elements will be extruded 
+ by 30 degrees twice for a total of 30*2=60)</li>
+
+\image html revolutionsn2.png "Example of Revolution with Angle by Step"
+
+<li> Total Angle - the elements are extruded by the specified angle only once and the number of steps defines the number of iterations 
+(i.e.for Angle=30 and Number of Steps=2, the elements will be extruded by 30/2=15 degrees twice for a total of 30). </li>
+
+\image html revolutionsn1.png "Example of Revolution with Total Angle"
+
+</ul>
+</li>
+
+<li>specify the tolerance for the operation</li>
+
+<li>activate  <b>Preview</b> checkbox to show the  parameter-setting in the viewer </li>
+<li>activate  <b>Generate Groups</b> checkbox to copy the groups of
+elements of the source mesh to the newly created one. </li>
+</li>
+</ul>
+
+<li>Click \b Apply or <b> Apply and Close</b> button to confirm the
+operation.</li>
+</ol>
+
+
+<br><b>See Also</b> a sample TUI Script of a 
+\ref tui_revolution "Revolution" operation.
+
+*/
