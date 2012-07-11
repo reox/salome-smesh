@@ -1,0 +1,13 @@
+Index: salome/SMESH_SRC_5.1.3/doc/salome/tui/doxyfile.in
+===================================================================
+--- salome.orig/SMESH_SRC_5.1.3/doc/salome/tui/doxyfile.in
++++ salome/SMESH_SRC_5.1.3/doc/salome/tui/doxyfile.in
+@@ -246,7 +246,7 @@
+ CALL_GRAPH             = NO
+ GRAPHICAL_HIERARCHY    = YES
+ DIRECTORY_GRAPH        = YES
+-DOT_IMAGE_FORMAT       = jpg
++DOT_IMAGE_FORMAT       = svg
+ DOT_PATH               = 
+ DOTFILE_DIRS           = 
+ MAX_DOT_GRAPH_WIDTH    = 1024

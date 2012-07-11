@@ -1,0 +1,23 @@
+diff --git a/configure.ac b/configure.ac
+index c4a80f6..3081c26 100755
+--- a/configure.ac
++++ b/configure.ac
+@@ -275,15 +275,15 @@ fi
+ 
+ AM_CONDITIONAL(SMESH_ENABLE_GUI, [test "${gui_ok}" = "yes"])
+ 
+-if test "${SalomeGUI_need}" == "yes"; then
++if test "${SalomeGUI_need}" = "yes"; then
+   if test "${FullGUI_ok}" != "yes"; then
+     AC_MSG_WARN(For configure SMESH module necessary full GUI!)
+   fi
+-elif test "${SalomeGUI_need}" == "auto"; then
++elif test "${SalomeGUI_need}" = "auto"; then
+   if test "${FullGUI_ok}" != "yes"; then
+     AC_MSG_WARN(Full GUI not found. Build will be done without GUI!)
+   fi
+-elif test "${SalomeGUI_need}" == "no"; then
++elif test "${SalomeGUI_need}" = "no"; then
+   echo Build without GUI option has been chosen
+ fi
+ 

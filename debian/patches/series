@@ -1,0 +1,7 @@
+smesh-debian-dirs.patch
+smesh-install-python.patch
+smesh-override-libdir-bindir.patch
+smesh-configure-bashisms.patch
+smesh-idl-path.patch
+smesh-gcc47-fixes.patch
+smesh-lightapp-module.patch

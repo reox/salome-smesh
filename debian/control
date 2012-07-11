@@ -1,0 +1,97 @@
+Source: salome-smesh
+Section: science
+Priority: extra
+Maintainer: Debian Science Maintainers <debian-science-maintainers@lists.alioth.debian.org>
+Uploaders:
+ Julien Cristau <julien.cristau@logilab.fr>,
+Standards-Version: 3.9.3
+Build-Depends:
+ debhelper (>= 8),
+ quilt (>= 0.46-7~),
+ autoconf,
+ automake,
+ libtool,
+ gfortran,
+ mpi-default-dev,
+ python-dev,
+ bison,
+ flex,
+ swig,
+ omniidl,
+ omniidl-python,
+ libomniorb4-dev,
+ libcos4-dev,
+ libboost-dev,
+ libboost-thread-dev,
+ libqt4-opengl-dev,
+ libqtwebkit-dev,
+ python-sip-dev,
+ python-qt4-dev,
+ pyqt4-dev-tools,
+ libqwt5-qt4-dev,
+ libvtk5-dev,
+ libhdf5-mpi-dev,
+ libmed-dev,
+ libmedc-dev,
+ libmedimport-dev,
+ libcgns-dev,
+ liboce-foundation-dev (>= 0.10),
+ liboce-modeling-dev (>= 0.10),
+ liboce-ocaf-lite-dev (>= 0.10),
+ liboce-ocaf-dev (>= 0.10),
+ liboce-visualization-dev (>= 0.10),
+ salome-gui-dev,
+ salome-kernel-dev,
+ salome-geom-dev,
+ salome-med-dev,
+# python-sphinx,
+ doxygen,
+ graphviz,
+Homepage: http://www.salome-platform.org/
+
+Package: salome-smesh
+Architecture: any
+Section: science
+Depends:
+ salome-kernel (>= 6.5),
+ salome-kernel (<< 6.6),
+ ${python:Depends},
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: Numerical simulation pre- and post-processor - smesh module
+ Salomé is a pre- and post-processor for numerical simulations.  It can import
+ CAD files in IGES and STEP formats, facilitates component integration in
+ heterogeneous systems, and has a user-friendly GUI as well as a Python console
+ with all of the platform functionality.
+ .
+ This package contains the Salomé SMESH module.
+
+Package: salome-smesh-dev
+Architecture: any
+Section: devel
+Depends:
+ salome-geom (= ${binary:Version}),
+ salome-kernel-dev,
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: Numerical simulation pre- and post-processor - smesh module development files
+ Salomé is a pre- and post-processor for numerical simulations.  It can import
+ CAD files in IGES and STEP formats, facilitates component integration in
+ heterogeneous systems, and has a user-friendly GUI as well as a Python console
+ with all of the platform functionality.
+ .
+ This package contains the SMESH module's development files
+
+Package: salome-smesh-doc
+Architecture: all
+Section: doc
+Depends:
+ ${misc:Depends},
+Suggests: salome-smesh
+Description: Numerical simulation pre- and post-processor - smesh module documentation
+ Salomé is a pre- and post-processor for numerical simulations.  It can import
+ CAD files in IGES and STEP formats, facilitates component integration in
+ heterogeneous systems, and has a user-friendly GUI as well as a Python console
+ with all of the platform functionality.
+ .
+ This package contains the SMESH module's documentation.

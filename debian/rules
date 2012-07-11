@@ -1,0 +1,51 @@
+#!/usr/bin/make -f
+
+build build-arch build-indep binary binary-arch binary-indep install clean:
+	dh $@ --builddirectory=build --with quilt --parallel
+
+override_dh_auto_configure:
+	KERNEL_ROOT_DIR=/usr/share/salome/KERNEL_SRC \
+	GUI_ROOT_DIR=/usr/share/salome/GUI_SRC \
+	MED_ROOT_DIR=/usr/share/salome/MED_SRC \
+	GEOM_ROOT_DIR=/usr/share/salome/GEOM_SRC \
+	./build_configure
+	dh_auto_configure --builddirectory=build -- \
+	  --with-mpi=/usr --with-mpi_include=/usr/include/mpi \
+	  --with-kernel=/usr \
+	  --with-gui=/usr \
+	  --with-med=/usr \
+	  --with-geom=/usr \
+	  --bindir=/usr/lib/salome/bin --libdir=/usr/lib/salome/lib \
+	  --docdir=/usr/share/doc/salome-smesh-doc \
+	  VTKSUFFIX=-5.8 \
+	  MED3HOME=/usr \
+	  CASROOT=/usr
+
+override_dh_auto_build:
+	dh_auto_build -- \
+	    pythondir=/usr/lib/salome/python \
+	    pyexecdir=/usr/lib/salome/python
+
+override_dh_auto_install:
+	dh_auto_install -- \
+	    pythondir=/usr/lib/salome/python \
+	    pyexecdir=/usr/lib/salome/python
+
+override_dh_install:
+	dh_install --list-missing
+
+override_dh_auto_clean:
+	dh_auto_clean --builddirectory=build
+	find -name Makefile.in -delete
+	rm -f aclocal.m4 configure
+	-find adm_local/unix/config_files/ ! -name Makefile.am ! -name 'check*.m4' -delete
+
+override_dh_shlibdeps:
+	dh_shlibdeps -l/usr/lib/salome/lib
+
+override_dh_pysupport:
+	dh_pysupport /usr/lib/salome
+
+.PHONY: build build-arch build-indep
+.PHONY: binary binary-arch binary-indep
+.PHONY: clean install

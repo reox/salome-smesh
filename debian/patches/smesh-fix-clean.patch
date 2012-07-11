@@ -1,0 +1,36 @@
+Index: salome/SMESH_SRC_5.1.3/doc/salome/gui/SMESH/Makefile.am
+===================================================================
+--- salome.orig/SMESH_SRC_5.1.3/doc/salome/gui/SMESH/Makefile.am
++++ salome/SMESH_SRC_5.1.3/doc/salome/gui/SMESH/Makefile.am
+@@ -52,7 +52,7 @@
+ clean-local:
+ 	@for filen in `find . -maxdepth 1` ; do				\
+ 	  case $${filen} in					\
+-	    ./Makefile | ./doxyfile | ./doxyfile_py ) ;;	\
++	    ./Makefile* | ./doxyfile* | ./images | ./input | ./static ) ;;	\
+ 	    . | .. ) ;;						\
+ 	    *) echo "Removing $${filen}" ; rm -rf $${filen} ;;	\
+ 	  esac ;						\
+@@ -62,8 +62,7 @@
+ 	$(INSTALL) -d $(DESTDIR)$(docdir)/gui/SMESH
+ 	@for filen in `find . -maxdepth 1` ; do								\
+ 	  case $${filen} in									\
+-	    ./Makefile | ./doxyfile | ./doxyfile_py ) ;;					\
+-	    ./doxyfile.bak | ./doxyfile_py.bak ) ;;						\
++	    ./Makefile* | ./doxyfile* ) ;;					\
+ 	    . | .. ) ;;										\
+ 	    *) echo "Installing $${filen}" ; cp -rp $${filen} $(DESTDIR)$(docdir)/gui/SMESH ;;	\
+ 	  esac ;										\
+Index: salome/SMESH_SRC_5.1.3/Makefile.am
+===================================================================
+--- salome.orig/SMESH_SRC_5.1.3/Makefile.am
++++ salome/SMESH_SRC_5.1.3/Makefile.am
+@@ -43,7 +43,7 @@
+ 
+ DIST_SUBDIRS = idl adm_local resources src doc bin 
+ 
+-DISTCLEANFILES = a.out aclocal.m4 configure local-install.sh
++DISTCLEANFILES = a.out aclocal.m4 configure local-install.sh adm_local/unix/config_files/config.guess adm_local/unix/config_files/config.sub adm_local/unix/config_files/depcomp adm_local/unix/config_files/install-sh adm_local/unix/config_files/libtool.m4 adm_local/unix/config_files/ltmain.sh adm_local/unix/config_files/ltoptions.m4 adm_local/unix/config_files/ltsugar.m4 adm_local/unix/config_files/ltversion.m4 adm_local/unix/config_files/lt~obsolete.m4 adm_local/unix/config_files/missing adm_local/unix/config_files/py-compile
+ 
+ salomeinclude_DATA = SMESH_version.h
+ 

@@ -1,0 +1,14 @@
+diff --git a/src/SMESHGUI/SMESHGUI.cxx b/src/SMESHGUI/SMESHGUI.cxx
+index b681a14..5997e47 100755
+--- a/src/SMESHGUI/SMESHGUI.cxx
++++ b/src/SMESHGUI/SMESHGUI.cxx
+@@ -1717,8 +1717,7 @@ SMESH::SMESH_Gen_var SMESHGUI::myComponentSMESH = SMESH::SMESH_Gen::_nil();
+  */
+ //=============================================================================
+ SMESHGUI::SMESHGUI() :
+-SalomeApp_Module( "SMESH" ),
+-LightApp_Module( "SMESH" )
++SalomeApp_Module( "SMESH" )
+ {
+   if ( CORBA::is_nil( myComponentSMESH ) )
+   {
