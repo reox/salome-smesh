@@ -1,5 +1,7 @@
 This Debian package was created on July 6th, 2012 by Julien Cristau
-<julien.cristau@logilab.fr>.
+<julien.cristau@logilab.fr>.  The files
+src/Tools/padder/resources/padderexe/med[23]/padder.exe were stripped from the
+upstream source directory, since they don't appear to be built from source.
 
 The source was downloaded from http://www.salome-platform.org/
 

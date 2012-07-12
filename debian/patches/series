@@ -5,3 +5,4 @@ smesh-configure-bashisms.patch
 smesh-idl-path.patch
 smesh-gcc47-fixes.patch
 smesh-lightapp-module.patch
+smesh-no-padder.exe.patch
