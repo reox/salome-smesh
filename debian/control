@@ -70,7 +70,7 @@ Package: salome-smesh-dev
 Architecture: any
 Section: devel
 Depends:
- salome-geom (= ${binary:Version}),
+ salome-smesh (= ${binary:Version}),
  salome-kernel-dev,
  ${shlibs:Depends},
  ${misc:Depends},
