@@ -30,6 +30,8 @@ override_dh_auto_install:
 	dh_auto_install -- \
 	    pythondir=/usr/lib/salome/python \
 	    pyexecdir=/usr/lib/salome/python
+	rm -f debian/tmp/usr/lib/salome/bin/VERSION
+	rm -f debian/tmp/usr/lib/salome/bin/MED_Test
 
 override_dh_install:
 	dh_install --list-missing
