@@ -46,7 +46,7 @@ override_dh_shlibdeps:
 	dh_shlibdeps -l/usr/lib/salome/lib
 
 override_dh_pysupport:
-	dh_pysupport /usr/lib/salome
+	dh_pysupport /usr/lib/salome /usr/share/salome
 
 .PHONY: build build-arch build-indep
 .PHONY: binary binary-arch binary-indep
