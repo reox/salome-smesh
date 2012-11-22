@@ -48,6 +48,9 @@ override_dh_shlibdeps:
 override_dh_pysupport:
 	dh_pysupport /usr/lib/salome /usr/share/salome
 
+override_dh_strip:
+	dh_strip --dbg-package=salome-smesh-dbg
+
 .PHONY: build build-arch build-indep
 .PHONY: binary binary-arch binary-indep
 .PHONY: clean install

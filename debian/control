@@ -96,3 +96,17 @@ Description: Numerical simulation pre- and post-processor - smesh module documen
  with all of the platform functionality.
  .
  This package contains the SMESH module's documentation.
+
+Package: salome-smesh-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Depends:
+ salome-smesh (= ${binary:Version})
+Description: Numerical simulation pre- and post-processor - smesh module debug symbols
+ Salomé is a pre- and post-processor for numerical simulations.  It can import
+ CAD files in IGES and STEP formats, facilitates component integration in
+ heterogeneous systems, and has a user-friendly GUI as well as a Python console
+ with all of the platform functionality.
+ .
+ This package contains the SMESH module's debugging symbols.
