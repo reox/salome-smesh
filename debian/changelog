@@ -1,6 +1,7 @@
 salome-smesh (6.5.0-3) UNRELEASED; urgency=low
 
   * Add debug package.
+  * Fix use after free in SMESHGUI_Hypotheses.
 
  -- Julien Cristau <julien.cristau@logilab.fr>  Thu, 08 Nov 2012 15:05:29 +0100
 

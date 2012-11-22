@@ -1,0 +1,20 @@
+Subject: Avoid use after free in SMESHGUI_Hypotheses
+
+QByteArray.constData() returns a pointer to memory owned by the QByteArray.
+Said QByteArray will get freed if nothing holds a reference to it, leading to
+use after free if we try to read the string later.  So just return the
+QByteArray instead, and rely on casting to get a char * when necessary.
+
+diff --git a/src/SMESHGUI/SMESHGUI_Hypotheses.h b/src/SMESHGUI/SMESHGUI_Hypotheses.h
+index c15484b..d9e1806 100755
+--- a/src/SMESHGUI/SMESHGUI_Hypotheses.h
++++ b/src/SMESHGUI/SMESHGUI_Hypotheses.h
+@@ -85,7 +85,7 @@ protected:
+     StdParam(){
+       isVariable = false;
+     }
+-    const char* text() const { return myText.toLatin1().constData(); }
++    QByteArray text() const { return myText.toLatin1(); }
+   };
+ 
+   typedef QList<StdParam>      ListOfStdParams;
