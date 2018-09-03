@@ -1,9 +1,9 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,10 +22,10 @@
 // Author    : Edward AGAPOV (eap)
 // Executable to find out a lower RAM limit (MB), i.e. at what size of freeRAM
 // reported by sysinfo, no more memory can be allocated.
-// This is not done inside a function of SALOME because allocated memory is not returned
-// to the system. (PAL16631)
+// This is not done inside a function of SALOME because allocated memory is not always
+// returned to the system. (PAL16631)
 //
-#ifndef WIN32
+#if !defined WIN32 && !defined __APPLE__
 #include <sys/sysinfo.h>
 #endif
 
@@ -36,7 +36,7 @@
 int main (int argc, char ** argv)
 {
   // To better understand what is going on here, consult bug [SALOME platform 0019911]
-#ifndef WIN32
+#if !defined WIN32 && !defined __APPLE__
   struct sysinfo si;
   int err = sysinfo( &si );
   if ( err )

@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,6 @@
 //  File   : SMESH_Script.cxx
 //  Author : Yves FRICAUD, OCC
 //  Module : SMESH
-//  $Header: 
 //
 #include "SMESHDS_Script.hxx"
 #include <iostream>
@@ -247,7 +246,7 @@ void SMESHDS_Script::AddVolume(int NewVolID, int idnode1, int idnode2, int idnod
 //function : AddPolygonalFace
 //purpose  : 
 //=======================================================================
-void SMESHDS_Script::AddPolygonalFace (int NewFaceID, std::vector<int> nodes_ids)
+void SMESHDS_Script::AddPolygonalFace (int NewFaceID, const std::vector<int>& nodes_ids)
 {
   if(myIsEmbeddedMode){
     myIsModified = true;
@@ -257,12 +256,25 @@ void SMESHDS_Script::AddPolygonalFace (int NewFaceID, std::vector<int> nodes_ids
 }
 
 //=======================================================================
+//function : AddQuadPolygonalFace
+//purpose  : 
+//=======================================================================
+void SMESHDS_Script::AddQuadPolygonalFace(int NewFaceID, const std::vector<int>& nodes_ids)
+{
+  if(myIsEmbeddedMode){
+    myIsModified = true;
+    return;
+  }
+  getCommand(SMESHDS_AddQuadPolygon)->AddQuadPolygonalFace(NewFaceID, nodes_ids);
+}
+
+//=======================================================================
 //function : AddPolyhedralVolume
 //purpose  : 
 //=======================================================================
-void SMESHDS_Script::AddPolyhedralVolume (int NewID,
-                                          std::vector<int> nodes_ids,
-                                          std::vector<int> quantities)
+void SMESHDS_Script::AddPolyhedralVolume (int                     NewID,
+                                          const std::vector<int>& nodes_ids,
+                                          const std::vector<int>& quantities)
 {
   if(myIsEmbeddedMode){
     myIsModified = true;
@@ -270,6 +282,19 @@ void SMESHDS_Script::AddPolyhedralVolume (int NewID,
   }
   getCommand(SMESHDS_AddPolyhedron)->AddPolyhedralVolume
     (NewID, nodes_ids, quantities);
+}
+
+//=======================================================================
+//function : AddBall
+//purpose  : Record adding a Ball
+//=======================================================================
+
+void SMESHDS_Script::AddBall(int NewBallID, int node, double diameter)
+{
+  if ( myIsEmbeddedMode )
+    myIsModified = true;
+  else
+    getCommand(SMESHDS_AddBall)->AddBall(NewBallID, node, diameter);
 }
 
 //=======================================================================
@@ -329,9 +354,9 @@ void SMESHDS_Script::ChangeElementNodes(int ElementID, int nodes[], int nbnodes)
 //function : ChangePolyhedronNodes
 //purpose  : 
 //=======================================================================
-void SMESHDS_Script::ChangePolyhedronNodes (const int        ElementID,
-                                            std::vector<int> nodes_ids,
-                                            std::vector<int> quantities)
+void SMESHDS_Script::ChangePolyhedronNodes (const int               ElementID,
+                                            const std::vector<int>& nodes_ids,
+                                            const std::vector<int>& quantities)
 {
   if(myIsEmbeddedMode){
     myIsModified = true;
@@ -421,6 +446,21 @@ void SMESHDS_Script::AddFace(int NewFaceID, int n1, int n2, int n3,
   }
   getCommand(SMESHDS_AddQuadTriangle)->AddFace(NewFaceID, n1, n2, n3,
                                                n12, n23, n31);
+}
+
+//=======================================================================
+//function : AddFace
+//purpose  : 
+//=======================================================================
+void SMESHDS_Script::AddFace(int NewFaceID, int n1, int n2, int n3,
+                             int n12, int n23, int n31, int nCenter)
+{
+  if(myIsEmbeddedMode){
+    myIsModified = true;
+    return;
+  }
+  getCommand(SMESHDS_AddBiQuadTriangle)->AddFace(NewFaceID, n1, n2, n3,
+                                                 n12, n23, n31, nCenter);
 }
 
 //=======================================================================

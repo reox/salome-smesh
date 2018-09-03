@@ -1,9 +1,9 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -158,20 +158,20 @@ istream & StdMeshers_MaxLength::LoadFrom(istream & load)
   bool isOK = true;
   double a;
 
-  isOK = (load >> a);
+  isOK = static_cast<bool>(load >> a);
   if (isOK)
     _length = a;
   else
     load.clear(ios::badbit | load.rdstate());
 
-  isOK = (load >> a);
+  isOK = static_cast<bool>(load >> a);
   if (isOK)
     _preestimated = a;
   else
     load.clear(ios::badbit | load.rdstate());
 
   bool pre;
-  isOK = (load >> pre);
+  isOK = static_cast<bool>(load >> pre);
   if ( isOK )
     _preestimation = pre;
   else
@@ -213,7 +213,7 @@ bool StdMeshers_MaxLength::SetParametersByMesh(const SMESH_Mesh*   theMesh,
     SMESHDS_Mesh* aMeshDS = const_cast< SMESH_Mesh* >( theMesh )->GetMeshDS();
     if ( SMESH_Algo::GetNodeParamOnEdge( aMeshDS, edge, params ))
     {
-      for ( int i = 1; i < params.size(); ++i )
+      for ( size_t i = 1; i < params.size(); ++i )
         _length += GCPnts_AbscissaPoint::Length( AdaptCurve, params[ i-1 ], params[ i ]);
       nbEdges += params.size() - 1;
     }

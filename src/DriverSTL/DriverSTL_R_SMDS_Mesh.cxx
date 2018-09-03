@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,67 +20,65 @@
 // See http://www.salome-platform.org/ or email : webmaster.salome@opencascade.com
 //
 
-#include <stdio.h>
-#include <gp_Pnt.hxx>
-//=======================================================================
-//function : HashCode
-//purpose  : 
-//=======================================================================
-inline Standard_Integer HashCode
-  (const gp_Pnt& point,  Standard_Integer Upper)
-{
-  union 
-    {
-    Standard_Real R[3];
-    Standard_Integer I[6];
-    } U;
-
-  point.Coord(U.R[0],U.R[1],U.R[2]);  
-
-  return ::HashCode(U.I[0]/23+U.I[1]/19+U.I[2]/17+U.I[3]/13+U.I[4]/11+U.I[5]/7,Upper);
-}
-static Standard_Real tab1[3];
-static Standard_Real tab2[3];
-//=======================================================================
-//function : IsEqual
-//purpose  : 
-//=======================================================================
-inline Standard_Boolean IsEqual
-  (const gp_Pnt& point1, const gp_Pnt& point2)
-{
-  point1.Coord(tab1[0],tab1[1],tab1[2]);  
-  point2.Coord(tab2[0],tab2[1],tab2[2]);  
-  return (memcmp(tab1,tab2,sizeof(tab1)) == 0);
-}
 #include "DriverSTL_R_SMDS_Mesh.h"
+
+#include <Basics_Utils.hxx>
+
+#include <gp_Pnt.hxx>
+#include <NCollection_DataMap.hxx>
+#include <Standard_NoMoreObject.hxx>
 
 #include "SMDS_Mesh.hxx"
 #include "SMDS_MeshElement.hxx"
 #include "SMDS_MeshNode.hxx"
+#include "SMESH_File.hxx"
 
-#include <OSD_Path.hxx>
-#include <OSD_File.hxx>
-#include <OSD_FromWhere.hxx>
-#include <OSD_Protection.hxx>
-#include <OSD_SingleProtection.hxx>
-#include <Standard_NoMoreObject.hxx>
+namespace
+{
+  struct Hasher
+  {
+    //=======================================================================
+    //function : HashCode
+    //purpose  :
+    //=======================================================================
+    inline static Standard_Integer HashCode
+    (const gp_Pnt& point,  Standard_Integer Upper)
+    {
+      union
+      {
+        Standard_Real    R[3];
+        Standard_Integer I[6];
+      } U;
 
-#include "utilities.h"
+      point.Coord( U.R[0], U.R[1], U.R[2] );
 
-static const int HEADER_SIZE           =  84;
-static const int SIZEOF_STL_FACET      =  50;
-//static const int STL_MIN_FILE_SIZE     = 284;
-static const int ASCII_LINES_PER_FACET =   7;
+      return ::HashCode(U.I[0]/23+U.I[1]/19+U.I[2]/17+U.I[3]/13+U.I[4]/11+U.I[5]/7,Upper);
+    }
+    //=======================================================================
+    //function : IsEqual
+    //purpose  :
+    //=======================================================================
+    inline static Standard_Boolean IsEqual
+    (const gp_Pnt& point1, const gp_Pnt& point2)
+    {
+      static Standard_Real tab1[3], tab2[3];
+      point1.Coord(tab1[0],tab1[1],tab1[2]);
+      point2.Coord(tab2[0],tab2[1],tab2[2]);
+      return (memcmp(tab1,tab2,sizeof(tab1)) == 0);
+    }
+  };
+  typedef NCollection_DataMap<gp_Pnt,SMDS_MeshNode*,Hasher> TDataMapOfPntNodePtr;
 
+  const int HEADER_SIZE           = 84; // 80 chars + int
+  const int SIZEOF_STL_FACET      = 50;
+  const int ASCII_LINES_PER_FACET = 7;
+  const int SIZE_OF_FLOAT         = 4;
+  // const int STL_MIN_FILE_SIZE     = 284;
+}
 
-//typedef NCollection_BaseCollection<SMDS_MeshNodePtr> DriverSTL_ColOfNodePtr;
-
-
-#include <NCollection_DataMap.hxx>
-typedef NCollection_DataMap<gp_Pnt,SMDS_MeshNode*> DriverSTL_DataMapOfPntNodePtr;
 //=======================================================================
 //function : DriverSTL_R_SMDS_Mesh
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 DriverSTL_R_SMDS_Mesh::DriverSTL_R_SMDS_Mesh()
@@ -104,44 +102,35 @@ void DriverSTL_R_SMDS_Mesh::SetIsCreateFaces( const bool theIsCreate )
 
 Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::Perform()
 {
+  Kernel_Utils::Localizer loc;
+
   Status aResult = DRS_OK;
 
-  TCollection_AsciiString aFileName( (char *)myFile.c_str() );
-  if ( aFileName.IsEmpty() ) {
+  if ( myFile.empty() ) {
     fprintf(stderr, ">> ERREOR : invalid file name \n");
     return DRS_FAIL;
   }
 
-  filebuf fic;
-  Standard_IStream is(&fic);
-  if (!fic.open(aFileName.ToCString(),ios::in)) {
-    fprintf(stderr, ">> ERROR : cannot open file %s \n", aFileName.ToCString());
+  SMESH_File file( myFile, /*open=*/false );
+  if ( !file.open() ) {
+    fprintf(stderr, ">> ERROR : cannot open file %s \n", myFile.c_str());
+    if ( file.error().empty() )
+      fprintf(stderr, ">> ERROR : %s \n", file.error().c_str());
     return DRS_FAIL;
   }
 
-
-  OSD_Path aPath( aFileName );
-  OSD_File file = OSD_File( aPath );
-  file.Open(OSD_ReadOnly,OSD_Protection(OSD_RWD,OSD_RWD,OSD_RWD,OSD_RWD));
-  unsigned char str[128];
-  Standard_Integer lread,i;
-  Standard_Address ach;
-  ach = (Standard_Address)str;
   // we skip the header which is in Ascii for both modes
-  file.Read(ach,HEADER_SIZE,lread);
+  const char* data = file;
+  data += HEADER_SIZE;
 
-  // we read 128 characters to detect if we have a non-ascii char
-  file.Read(ach,sizeof(str),lread);
-  
+  // we check 128 characters to detect if we have a non-ascii char
   myIsAscii = Standard_True;
-  for (i = 0; i < lread; ++i) {
-    if (str[i] > '~') {
+  for (int i = 0; i < 128; ++i, ++data) {
+    if ( !isascii( *data ) && data < file.end() ) {
       myIsAscii = Standard_False;
       break;
     }
   }
-      
-  file.Close();
 
   if ( !myMesh ) {
     fprintf(stderr, ">> ERREOR : cannot create mesh \n");
@@ -149,37 +138,35 @@ Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::Perform()
   }
 
   if ( myIsAscii )
-    aResult = readAscii();
+    aResult = readAscii( file );
   else
-    aResult = readBinary();
+    aResult = readBinary( file );
 
   return aResult;
 }
 
 // static methods
 
-static Standard_Real readFloat(OSD_File& theFile)
+static Standard_Real readFloat(SMESH_File& theFile)
 {
   union {
-    Standard_Boolean i; 
-    Standard_ShortReal f;
-  }u;
+    int   i;
+    float f;
+  } u;
 
-  char c[4];
-  Standard_Address adr;
-  adr = (Standard_Address)c;
-  Standard_Integer lread;
-  theFile.Read(adr,4,lread);
+  const char* c = theFile;
+  u.i  = 0;
   u.i  =  c[0] & 0xFF;
   u.i |= (c[1] & 0xFF) << 0x08;
   u.i |= (c[2] & 0xFF) << 0x10;
   u.i |= (c[3] & 0xFF) << 0x18;
+  theFile += SIZE_OF_FLOAT;
 
   return u.f;
 }
 
 static SMDS_MeshNode* addNode(const gp_Pnt& P,
-                              DriverSTL_DataMapOfPntNodePtr& uniqnodes,
+                              TDataMapOfPntNodePtr& uniqnodes,
                               SMDS_Mesh* theMesh)
 {
   SMDS_MeshNode* node = 0;
@@ -194,7 +181,7 @@ static SMDS_MeshNode* addNode(const gp_Pnt& P,
 }                                
 
 static SMDS_MeshNode* readNode(FILE* file,
-                               DriverSTL_DataMapOfPntNodePtr& uniqnodes,
+                               TDataMapOfPntNodePtr& uniqnodes,
                                SMDS_Mesh* theMesh)
 {
   Standard_ShortReal coord[3];
@@ -205,59 +192,71 @@ static SMDS_MeshNode* readNode(FILE* file,
   return addNode( P, uniqnodes, theMesh );
 }
 
-static SMDS_MeshNode* readNode(OSD_File& theFile,
-                               DriverSTL_DataMapOfPntNodePtr& uniqnodes,
+static SMDS_MeshNode* readNode(SMESH_File& theFile,
+                               TDataMapOfPntNodePtr& uniqnodes,
                                SMDS_Mesh* theMesh)
 {
-  Standard_ShortReal coord[3];
-  coord[0] = readFloat(theFile);
-  coord[1] = readFloat(theFile);
-  coord[2] = readFloat(theFile);
+  gp_Pnt coord;
+  coord.SetX( readFloat(theFile));
+  coord.SetY( readFloat(theFile));
+  coord.SetZ( readFloat(theFile));
 
-  gp_Pnt P(coord[0],coord[1],coord[2]);
-  return addNode( P, uniqnodes, theMesh );
+  return addNode( coord, uniqnodes, theMesh );
 }
 
 //=======================================================================
 //function : readAscii
-//purpose  : 
+//purpose  :
 //=======================================================================
 
-Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::readAscii() const
+Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::readAscii(SMESH_File& theFile) const
 {
   Status aResult = DRS_OK;
-  long ipos;
-  Standard_Integer nbLines = 0;
 
-  // Open the file 
-  TCollection_AsciiString aFileName( (char *)myFile.c_str() );
-  FILE* file = fopen(aFileName.ToCString(),"r");
-  fseek(file,0L,SEEK_END);
+  // get a solid name
+  if ( strncmp( "solid ", theFile, strlen("solid ")) == 0 ) // not empty
+  {
+    const char * header = theFile;
+    std::string& name = const_cast<std::string&>( myName );
+    for ( header += strlen("solid "); !iscntrl( *header ); ++header )
+      name.push_back( *header );
+
+    std::string::iterator i = name.begin();
+    while ( i != name.end() && isspace( *i )) ++i;
+    name.erase( name.begin(), i );
+
+    size_t n = name.size();
+    while ( n > 0 && isspace( name[ n - 1 ] )) --n;
+    name.resize( n );
+  }
+
   // get the file size
-  long filesize = ftell(file);
-  fclose(file);
-  file = fopen(aFileName.ToCString(),"r");
-  
+  long filesize = theFile.size();
+  theFile.close();
+
+  // Open the file
+  FILE* file = fopen( myFile.c_str(),"r");
+
   // count the number of lines
-  for (ipos = 0; ipos < filesize; ++ipos) {
+  Standard_Integer nbLines = 0;
+  for (long ipos = 0; ipos < filesize; ++ipos)
+  {
     if (getc(file) == '\n')
       nbLines++;
   }
 
   // go back to the beginning of the file
-//  fclose(file);
-//  file = fopen(aFileName.ToCString(),"r");
   rewind(file);
-  
+
   Standard_Integer nbTri = (nbLines / ASCII_LINES_PER_FACET);
 
-  DriverSTL_DataMapOfPntNodePtr uniqnodes;
+  TDataMapOfPntNodePtr uniqnodes;
   // skip header
   while (getc(file) != '\n');
 
   // main reading
-  for (Standard_Integer iTri = 0; iTri < nbTri; ++iTri) {
-
+  for (Standard_Integer iTri = 0; iTri < nbTri; ++iTri)
+  {
     // skipping the facet normal
     Standard_ShortReal normal[3];
     fscanf(file,"%*s %*s %f %f %f\n",&normal[0],&normal[1],&normal[2]);
@@ -289,25 +288,16 @@ Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::readAscii() const
 //purpose  : 
 //=======================================================================
 
-Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::readBinary() const
+Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::readBinary(SMESH_File& file) const
 {
   Status aResult = DRS_OK;
-
-  char buftest[5];
-  Standard_Address adr;
-  adr = (Standard_Address)buftest;
-
-  TCollection_AsciiString aFileName( (char *)myFile.c_str() );
-  OSD_File aFile = OSD_File(OSD_Path( aFileName ));
-  aFile.Open(OSD_ReadOnly,OSD_Protection(OSD_RWD,OSD_RWD,OSD_RWD,OSD_RWD));
 
   // the size of the file (minus the header size)
   // must be a multiple of SIZEOF_STL_FACET
 
-  // compute file size
-  Standard_Integer filesize = aFile.Size();
+  long filesize = file.size();
 
-  if ( (filesize - HEADER_SIZE) % SIZEOF_STL_FACET !=0 
+  if ( (filesize - HEADER_SIZE) % SIZEOF_STL_FACET != 0 
       // Commented to allow reading small files (ex: 1 face)
       /*|| (filesize < STL_MIN_FILE_SIZE)*/) {
     Standard_NoMoreObject::Raise("DriverSTL_R_SMDS_MESH::readBinary (wrong file size)");
@@ -317,30 +307,39 @@ Driver_Mesh::Status DriverSTL_R_SMDS_Mesh::readBinary() const
   // sometimes it is wrong, and with this technique we don't need to swap endians for integer
   Standard_Integer nbTri = ((filesize - HEADER_SIZE) / SIZEOF_STL_FACET);
 
-  // skip the header
-  aFile.Seek(HEADER_SIZE,OSD_FromBeginning);
+  // get a solid name
+  if ( strncmp( "name: ", file, strlen("name: ")) == 0 ) // name present
+  {
+    const char * header = file;
+    std::string&   name = const_cast<std::string&>( myName );
+    header += strlen("name: ");
+    name.assign( header, HEADER_SIZE - strlen("name: ") - 4);
 
-  DriverSTL_DataMapOfPntNodePtr uniqnodes;
-  Standard_Integer lread;
+    size_t n = name.size();
+    while ( n > 0 && isspace( name[ n - 1 ] )) --n;
+    name.resize( n );
+  }
+
+  // skip the header
+  file += HEADER_SIZE;
+
+  TDataMapOfPntNodePtr uniqnodes;
   
   for (Standard_Integer iTri = 0; iTri < nbTri; ++iTri) {
 
     // ignore normals
-    readFloat(aFile);
-    readFloat(aFile);
-    readFloat(aFile);
+    file += 3 * SIZE_OF_FLOAT;
 
     // read vertices
-    SMDS_MeshNode* node1 = readNode( aFile, uniqnodes, myMesh );
-    SMDS_MeshNode* node2 = readNode( aFile, uniqnodes, myMesh );
-    SMDS_MeshNode* node3 = readNode( aFile, uniqnodes, myMesh );
+    SMDS_MeshNode* node1 = readNode( file, uniqnodes, myMesh );
+    SMDS_MeshNode* node2 = readNode( file, uniqnodes, myMesh );
+    SMDS_MeshNode* node3 = readNode( file, uniqnodes, myMesh );
 
     if (myIsCreateFaces)
       myMesh->AddFace(node1,node2,node3);
 
     // skip extra bytes
-    aFile.Read(adr,2,lread);
+    file += 2;
   }
-  aFile.Close();
   return aResult;
 }

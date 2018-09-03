@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -38,20 +38,28 @@
 #include "SMESH_Group.hxx"
 #include "SMESH_Mesh.hxx"
 #include "SMESH_MesherHelper.hxx"
+#include "SMESH_OctreeNode.hxx"
 #include "SMESH_subMesh.hxx"
 
 #include "Utils_SALOME_Exception.hxx"
 #include "utilities.h"
 
+#include <BRepBndLib.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_B2d.hxx>
+#include <Bnd_Box.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <GeomAdaptor_Surface.hxx>
+#include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Vertex.hxx>
-#include <Precision.hxx>
 
 #include <numeric>
 
@@ -90,12 +98,12 @@ namespace
 StdMeshers_Import_1D2D::StdMeshers_Import_1D2D(int hypId, int studyId, SMESH_Gen * gen)
   :SMESH_2D_Algo(hypId, studyId, gen), _sourceHyp(0)
 {
-  MESSAGE("StdMeshers_Import_1D2D::StdMeshers_Import_1D2D");
   _name = "Import_1D2D";
   _shapeType = (1 << TopAbs_FACE);
 
   _compatibleHypothesis.push_back("ImportSource2D");
   _requireDiscreteBoundary = false;
+  _supportSubmeshes = true;
 }
 
 //=============================================================================
@@ -164,7 +172,7 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
 {
   if ( !_sourceHyp ) return false;
 
-  const vector<SMESH_Group*>& srcGroups = _sourceHyp->GetGroups();
+  const vector<SMESH_Group*>& srcGroups = _sourceHyp->GetGroups(/*loaded=*/true);
   if ( srcGroups.empty() )
     return error("Invalid source groups");
 
@@ -183,17 +191,43 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
   const int shapeID = tgtMesh->ShapeToIndex( geomFace );
   const bool toCheckOri = (helper.NbAncestors( geomFace, theMesh, TopAbs_SOLID ) == 1 );
 
+
   Handle(Geom_Surface) surface = BRep_Tool::Surface( geomFace );
-  const bool reverse = 
-    ( helper.GetSubShapeOri( tgtMesh->ShapeToMesh(), geomFace) == TopAbs_REVERSED );
+  const bool reverse =
+    ( helper.GetSubShapeOri( tgtMesh->ShapeToMesh(), geomFace ) == TopAbs_REVERSED );
   gp_Pnt p; gp_Vec du, dv;
+
+  // BRepClass_FaceClassifier is most time consuming, so minimize its usage
+  BRepClass_FaceClassifier classifier;
+  Bnd_B2d bndBox2d;
+  Bnd_Box bndBox3d;
+  {
+    Standard_Real umin,umax,vmin,vmax;
+    BRepTools::UVBounds(geomFace,umin,umax,vmin,vmax);
+    gp_XY pmin( umin,vmin ), pmax( umax,vmax );
+    bndBox2d.Add( pmin );
+    bndBox2d.Add( pmax );
+    if ( helper.HasSeam() )
+    {
+      const int i = helper.GetPeriodicIndex();
+      pmin.SetCoord( i, helper.GetOtherParam( pmin.Coord( i )));
+      pmax.SetCoord( i, helper.GetOtherParam( pmax.Coord( i )));
+      bndBox2d.Add( pmin );
+      bndBox2d.Add( pmax );
+    }
+    bndBox2d.Enlarge( 1e-2 * Sqrt( bndBox2d.SquareExtent() ));
+
+    BRepBndLib::Add( geomFace, bndBox3d );
+    bndBox3d.Enlarge( 1e-2 * sqrt( bndBox3d.SquareExtent() ));
+  }
 
   set<int> subShapeIDs;
   subShapeIDs.insert( shapeID );
 
-  // get nodes on vertices
-  list < SMESH_TNodeXYZ > vertexNodes;
-  list < SMESH_TNodeXYZ >::iterator vNIt;
+  // nodes already existing on sub-shapes of the FACE
+  TIDSortedNodeSet existingNodes;
+
+  // get/make nodes on vertices and add them to existingNodes
   TopExp_Explorer exp( theShape, TopAbs_VERTEX );
   for ( ; exp.More(); exp.Next() )
   {
@@ -207,8 +241,28 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
       n = SMESH_Algo::VertexNode( v, tgtMesh );
       if ( !n ) return false; // very strange
     }
-    vertexNodes.push_back( SMESH_TNodeXYZ( n ));
+    existingNodes.insert( n );
   }
+
+  // get EDGEs and their ids and get existing nodes on EDGEs
+  vector< TopoDS_Edge > edges;
+  for ( exp.Init( theShape, TopAbs_EDGE ); exp.More(); exp.Next() )
+  {
+    const TopoDS_Edge & edge = TopoDS::Edge( exp.Current() );
+    if ( !SMESH_Algo::isDegenerated( edge ))
+      if ( subShapeIDs.insert( tgtMesh->ShapeToIndex( edge )).second )
+      {
+        edges.push_back( edge );
+        if ( SMESHDS_SubMesh* eSM = tgtMesh->MeshElements( edge ))
+        {
+          typedef SMDS_StdIterator< const SMDS_MeshNode*, SMDS_NodeIteratorPtr > iterator;
+          existingNodes.insert( iterator( eSM->GetNodes() ), iterator() );
+        }
+      }
+  }
+  // octree to find existing nodes
+  SMESH_OctreeNode existingNodeOcTr( existingNodes );
+  std::map<double, const SMDS_MeshNode*> dist2foundNodes;
 
   // to count now many times a link between nodes encounters
   map<TLink, int> linkCount;
@@ -221,7 +275,11 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
 
   StdMeshers_Import_1D::TNodeNodeMap* n2n;
   StdMeshers_Import_1D::TElemElemMap* e2e;
-  vector<const SMDS_MeshNode*> newNodes;
+  vector<TopAbs_State>         nodeState;
+  vector<const SMDS_MeshNode*> newNodes; // of a face
+  set   <const SMDS_MeshNode*> bndNodes; // nodes classified ON
+  vector<bool>                 isNodeIn; // nodes classified IN, by node ID
+
   for ( size_t iG = 0; iG < srcGroups.size(); ++iG )
   {
     const SMESHDS_GroupBase* srcGroup = srcGroups[iG]->GetGroupDS();
@@ -234,76 +292,157 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
     const double groupTol = 0.5 * sqrt( getMinElemSize2( srcGroup ));
     minGroupTol = std::min( groupTol, minGroupTol );
 
+    //GeomAdaptor_Surface S( surface );
+    // const double clsfTol = Min( S.UResolution( 0.1 * groupTol ), -- issue 0023092
+    //                             S.VResolution( 0.1 * groupTol ));
+    const double clsfTol = BRep_Tool::Tolerance( geomFace );
+
+    StdMeshers_Import_1D::TNodeNodeMap::iterator n2nIt;
+    pair< StdMeshers_Import_1D::TNodeNodeMap::iterator, bool > it_isnew;
+
     SMDS_ElemIteratorPtr srcElems = srcGroup->GetElements();
-    SMDS_MeshNode *tmpNode = helper.AddNode(0,0,0);
-    gp_XY uv( Precision::Infinite(), Precision::Infinite() );
     while ( srcElems->more() ) // loop on group contents
     {
       const SMDS_MeshElement* face = srcElems->next();
+
+      SMDS_MeshElement::iterator node = face->begin_nodes();
+      if ( bndBox3d.IsOut( SMESH_TNodeXYZ( *node )))
+        continue;
+
       // find or create nodes of a new face
-      newNodes.resize( face->NbNodes() );
+      nodeState.resize( face->NbNodes() );
+      newNodes.resize( nodeState.size() );
       newNodes.back() = 0;
       int nbCreatedNodes = 0;
-      SMDS_MeshElement::iterator node = face->begin_nodes();
+      bool isOut = false, isIn = false; // if at least one node isIn - do not classify other nodes
       for ( size_t i = 0; i < newNodes.size(); ++i, ++node )
       {
-        StdMeshers_Import_1D::TNodeNodeMap::iterator n2nIt = n2n->insert( make_pair( *node, (SMDS_MeshNode*)0 )).first;
-        if ( n2nIt->second )
+        SMESH_TNodeXYZ nXYZ = *node;
+        nodeState[ i ] = TopAbs_UNKNOWN;
+        newNodes [ i ] = 0;
+
+        it_isnew = n2n->insert( make_pair( *node, (SMDS_MeshNode*)0 ));
+        n2nIt    = it_isnew.first;
+
+        const SMDS_MeshNode* & newNode = n2nIt->second;
+        if ( !it_isnew.second && !newNode )
+          break; // a node is mapped to NULL - it is OUT of the FACE
+
+        if ( newNode )
         {
-          if ( !subShapeIDs.count( n2nIt->second->getshapeId() ))
-            break;
+          if ( !subShapeIDs.count( newNode->getshapeId() ))
+            break; // node is Imported onto other FACE
+          if ( newNode->GetID() < (int) isNodeIn.size() &&
+               isNodeIn[ newNode->GetID() ])
+            isIn = true;
+          if ( !isIn && bndNodes.count( *node ))
+            nodeState[ i ] = TopAbs_ON;
         }
         else
         {
-          // find an existing vertex node
-          for ( vNIt = vertexNodes.begin(); vNIt != vertexNodes.end(); ++vNIt)
-            if ( vNIt->SquareDistance( *node ) < groupTol * groupTol)
-            {
-              (*n2nIt).second = vNIt->_node;
-              vertexNodes.erase( vNIt );
-              break;
-            }
-        }
-        if ( !n2nIt->second )
-        {
-          // find out if node lies on theShape
-          tmpNode->setXYZ( (*node)->X(), (*node)->Y(), (*node)->Z());
-          uv.SetCoord( Precision::Infinite(), Precision::Infinite() );
-          if ( helper.CheckNodeUV( geomFace, tmpNode, uv, groupTol, /*force=*/true ))
+          // find a node pre-existing on EDGE or VERTEX
+          dist2foundNodes.clear();
+          existingNodeOcTr.NodesAround( nXYZ, dist2foundNodes, groupTol );
+          if ( !dist2foundNodes.empty() )
           {
-            SMDS_MeshNode* newNode = tgtMesh->AddNode( (*node)->X(), (*node)->Y(), (*node)->Z());
-            n2nIt->second = newNode;
-            tgtMesh->SetNodeOnFace( newNode, shapeID, uv.X(), uv.Y() );
-            nbCreatedNodes++;
+            newNode = dist2foundNodes.begin()->second;
+            nodeState[ i ] = TopAbs_ON;
           }
         }
-        if ( !(newNodes[i] = n2nIt->second ))
+
+        if ( !newNode )
+        {
+          // find out if node lies on the surface of theShape
+          gp_XY uv( Precision::Infinite(), 0 );
+          isOut = ( !helper.CheckNodeUV( geomFace, *node, uv, groupTol, /*force=*/true ) ||
+                    bndBox2d.IsOut( uv ));
+          if ( !isOut && !isIn ) // classify
+          {
+            classifier.Perform( geomFace, uv, clsfTol );
+            nodeState[i] = classifier.State();
+            isOut = ( nodeState[i] == TopAbs_OUT );
+          }
+          if ( !isOut ) // create a new node
+          {
+            newNode = tgtMesh->AddNode( nXYZ.X(), nXYZ.Y(), nXYZ.Z());
+            tgtMesh->SetNodeOnFace( newNode, shapeID, uv.X(), uv.Y() );
+            nbCreatedNodes++;
+            if ( newNode->GetID() >= (int) isNodeIn.size() )
+            {
+              isNodeIn.push_back( false ); // allow allocate more than newNode->GetID()
+              isNodeIn.resize( newNode->GetID() + 1, false );
+            }
+            if ( nodeState[i] == TopAbs_ON )
+              bndNodes.insert( *node );
+            else
+              isNodeIn[ newNode->GetID() ] = isIn = true;
+          }
+        }
+        if ( !(newNodes[i] = newNode ) || isOut )
           break;
       }
+
       if ( !newNodes.back() )
         continue; // not all nodes of the face lie on theShape
+
+      if ( !isIn ) // if all nodes are on FACE boundary, a mesh face can be OUT
+      {
+        // check state of nodes created for other faces
+        for ( size_t i = 0; i < nodeState.size() && !isIn; ++i )
+        {
+          if ( nodeState[i] != TopAbs_UNKNOWN ) continue;
+          gp_XY uv = helper.GetNodeUV( geomFace, newNodes[i] );
+          classifier.Perform( geomFace, uv, clsfTol );
+          nodeState[i] = classifier.State();
+          isIn = ( nodeState[i] == TopAbs_IN );
+        }
+        if ( !isIn ) // classify face center
+        {
+          gp_XYZ gc( 0., 0., 0 );
+          for ( size_t i = 0; i < newNodes.size(); ++i )
+            gc += SMESH_TNodeXYZ( newNodes[i] );
+          gc /= newNodes.size();
+
+          TopLoc_Location loc;
+          GeomAPI_ProjectPointOnSurf& proj = helper.GetProjector( geomFace,
+                                                                  loc,
+                                                                  helper.MaxTolerance( geomFace ));
+          if ( !loc.IsIdentity() ) loc.Transformation().Inverted().Transforms( gc );
+          proj.Perform( gc );
+          if ( !proj.IsDone() || proj.NbPoints() < 1 )
+            continue;
+          Standard_Real U,V;
+          proj.LowerDistanceParameters(U,V);
+          gp_XY uv( U,V );
+          classifier.Perform( geomFace, uv, clsfTol );
+          if ( classifier.State() != TopAbs_IN )
+            continue;
+        }
+      }
 
       // try to find already created face
       SMDS_MeshElement * newFace = 0;
       if ( nbCreatedNodes == 0 &&
            tgtMesh->FindElement(newNodes, SMDSAbs_Face, /*noMedium=*/false))
-        continue; // repeated face in source groups already created 
+        continue; // repeated face in source groups already created
 
       // check future face orientation
+      const int nbCorners = face->NbCornerNodes();
+      const bool isQuad   = ( nbCorners != (int) newNodes.size() );
       if ( toCheckOri )
       {
         int iNode = -1;
         gp_Vec geomNorm;
         do
         {
-          uv = helper.GetNodeUV( geomFace, newNodes[++iNode] );
+          gp_XY uv = helper.GetNodeUV( geomFace, newNodes[++iNode] );
           surface->D1( uv.X(),uv.Y(), p, du,dv );
           geomNorm = reverse ? dv^du : du^dv;
         }
-        while ( geomNorm.SquareMagnitude() < 1e-6 && iNode+1 < face->NbCornerNodes());
+        while ( geomNorm.SquareMagnitude() < 1e-6 && iNode+1 < nbCorners );
 
-        int iNext = helper.WrapIndex( iNode+1, face->NbCornerNodes() );
-        int iPrev = helper.WrapIndex( iNode-1, face->NbCornerNodes() );
+        int iNext = helper.WrapIndex( iNode+1, nbCorners );
+        int iPrev = helper.WrapIndex( iNode-1, nbCorners );
 
         SMESH_TNodeXYZ prevNode( newNodes[iPrev] );
         SMESH_TNodeXYZ curNode ( newNodes[iNode] );
@@ -313,40 +452,43 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
         gp_Vec meshNorm = n1n2 ^ n1n0;
 
         if ( geomNorm * meshNorm < 0 )
-          std::reverse( newNodes.begin(), newNodes.end() );
+          SMDS_MeshCell::applyInterlace
+            ( SMDS_MeshCell::reverseSmdsOrder( face->GetEntityType(), newNodes.size() ), newNodes );
       }
 
       // make a new face
-      switch ( newNodes.size() )
-      {
-      case 3:
-        newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2] );
-        break;
-      case 4:
-        newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2], newNodes[3] );
-        break;
-      case 6:
-        newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2],
-                                    newNodes[3], newNodes[4], newNodes[5]);
-        break;
-      case 8:
-        newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2], newNodes[3],
-                                    newNodes[4], newNodes[5], newNodes[6], newNodes[7]);
-        break;
-      default: continue;
-      }
+      if ( face->IsPoly() )
+        newFace = tgtMesh->AddPolygonalFace( newNodes );
+      else
+        switch ( newNodes.size() )
+        {
+        case 3:
+          newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2] );
+          break;
+        case 4:
+          newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2], newNodes[3] );
+          break;
+        case 6:
+          newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2],
+                                      newNodes[3], newNodes[4], newNodes[5]);
+          break;
+        case 8:
+          newFace = tgtMesh->AddFace( newNodes[0], newNodes[1], newNodes[2], newNodes[3],
+                                      newNodes[4], newNodes[5], newNodes[6], newNodes[7]);
+          break;
+        default: continue;
+        }
       tgtMesh->SetMeshElementOnShape( newFace, shapeID );
       e2e->insert( make_pair( face, newFace ));
 
       // collect links
-      int nbNodes = face->NbCornerNodes();
       const SMDS_MeshNode* medium = 0;
-      for ( int i = 0; i < nbNodes; ++i )
+      for ( int i = 0; i < nbCorners; ++i )
       {
         const SMDS_MeshNode* n1 = newNodes[i];
-        const SMDS_MeshNode* n2 = newNodes[ (i+1)%nbNodes ];
-        if ( newFace->IsQuadratic() )
-          medium = newNodes[i+nbNodes];
+        const SMDS_MeshNode* n2 = newNodes[ (i+1)%nbCorners ];
+        if ( isQuad ) // quadratic face
+          medium = newNodes[i+nbCorners];
         link2Nb = linkCount.insert( make_pair( TLink( n1, n2, medium ), 0)).first;
         ++link2Nb->second;
         // if ( link2Nb->second == 1 )
@@ -358,18 +500,19 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
         // }
       }
     }
-    helper.GetMeshDS()->RemoveNode(tmpNode);
+    // Remove OUT nodes from n2n map
+    for ( n2nIt = n2n->begin(); n2nIt != n2n->end(); )
+      if ( !n2nIt->second )
+        n2n->erase( n2nIt++ );
+      else
+        ++n2nIt;
   }
+
 
   // ==========================================================
   // Put nodes on geom edges and create edges on them;
   // check if the whole geom face is covered by imported faces
   // ==========================================================
-
-  vector< TopoDS_Edge > edges;
-  for ( exp.Init( theShape, TopAbs_EDGE ); exp.More(); exp.Next() )
-    if ( subShapeIDs.insert( tgtMesh->ShapeToIndex( exp.Current() )).second )
-      edges.push_back( TopoDS::Edge( exp.Current() ));
 
   // use large tolerance for projection of nodes to edges because of
   // BLSURF mesher specifics (issue 0020918, Study2.hdf)
@@ -395,7 +538,7 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
         for ( int is1stN = 0; is1stN < 2 && nodesOnBoundary; ++is1stN )
         {
           const SMDS_MeshNode* n = is1stN ? link.node1() : link.node2();
-          if ( !subShapeIDs.count( n->getshapeId() ))
+          if ( !subShapeIDs.count( n->getshapeId() )) // n is assigned to FACE
           {
             for ( size_t iE = 0; iE < edges.size(); ++iE )
               if ( helper.CheckNodeU( edges[iE], n, u=0, projTol, /*force=*/true ))
@@ -405,7 +548,7 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
                   // duplicated node on vertex
                   return error("Source elements overlap one another");
                 tgtFaceSM->RemoveNode( n, /*isNodeDeleted=*/false );
-                tgtMesh->SetNodeOnEdge( (SMDS_MeshNode*)n, edges[iE], u );
+                tgtMesh->SetNodeOnEdge( n, edges[iE], u );
                 break;
               }
             nodesOnBoundary = subShapeIDs.count( n->getshapeId());
@@ -424,13 +567,13 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
           error("free internal link"); // just for an easier debug
           break;
         }
-        if ( bndShapes.front().ShapeType() == TopAbs_EDGE &&
+        if ( bndShapes.front().ShapeType() == TopAbs_EDGE && // all link nodes are on EDGEs
              bndShapes.front() != bndShapes.back() )
           // link nodes on different geom edges
           return error(COMPERR_BAD_INPUT_MESH, "Source nodes mismatch target vertices");
 
         // find geom edge the link is on
-        if ( bndShapes.back().ShapeType() != TopAbs_EDGE )
+        if ( bndShapes.back().ShapeType() != TopAbs_EDGE ) // all link nodes are on VERTEXes
         {
           // find geom edge by two vertices
           TopoDS_Shape geomEdge = helper.GetCommonAncestor( bndShapes.back(),
@@ -453,8 +596,7 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
         if ( link._reversed ) std::swap( newNodes[0], newNodes[1] );
         if ( link._medium )
         {
-          newNodes.push_back( link._medium );
-          edge = tgtMesh->AddEdge( newNodes[0], newNodes[1], newNodes[2] );
+          edge = tgtMesh->AddEdge( newNodes[0], newNodes[1], link._medium );
 
           TopoDS_Edge geomEdge = TopoDS::Edge(bndShapes.back());
           helper.CheckNodeU( geomEdge, link._medium, u, projTol, /*force=*/true );
@@ -495,7 +637,7 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
           int sId = editor.FindShape( edge );
           nbEdges += subShapeIDs.count( sId );
         }
-        if ( nbEdges < 2 )
+        if ( nbEdges < 2 && !helper.IsRealSeam( s ))
           return false; // weird
         if ( nbEdges > 2 )
           return error( COMPERR_BAD_INPUT_MESH, "Source elements overlap one another");
@@ -558,7 +700,7 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
         seamHelper.SetSubShape( edges[ iE ]);
         seamHelper.SetElementsOnShape( true );
 
-        if ( (*checkedFaces.begin())->IsQuadratic() )
+        if ( !checkedFaces.empty() && (*checkedFaces.begin())->IsQuadratic() )
           for ( set< const SMDS_MeshElement* >::iterator fIt = checkedFaces.begin();
                 fIt != checkedFaces.end(); ++fIt )
             seamHelper.AddTLinks( static_cast<const SMDS_MeshFace*>( *fIt ));
@@ -583,12 +725,11 @@ bool StdMeshers_Import_1D2D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & 
   for ( size_t iE = 0; iE < edges.size(); ++iE )
   {
     SMESH_subMesh * sm = theMesh.GetSubMesh( edges[iE] );
-    if ( BRep_Tool::Degenerated( edges[iE] ))
-      sm->SetIsAlwaysComputed( true );
+    // if ( SMESH_Algo::isDegenerated( edges[iE] ))
+    //   sm->SetIsAlwaysComputed( true );
     sm->ComputeStateEngine(SMESH_subMesh::CHECK_COMPUTE_STATE);
     if ( sm->GetComputeState() != SMESH_subMesh::COMPUTE_OK )
-      return error(SMESH_Comment("Failed to create segments on the edge ")
-                   << tgtMesh->ShapeToIndex( edges[iE ]));
+      return error(SMESH_Comment("Failed to create segments on the edge #") << sm->GetId());
   }
 
   // ============
@@ -682,7 +823,7 @@ bool StdMeshers_Import_1D2D::Evaluate(SMESH_Mesh &         theMesh,
     set<const SMDS_MeshNode* > allNodes;
     gp_XY uv;
     double minGroupTol = 1e100;
-    for ( int iG = 0; iG < srcGroups.size(); ++iG )
+    for ( size_t iG = 0; iG < srcGroups.size(); ++iG )
     {
       const SMESHDS_GroupBase* srcGroup = srcGroups[iG]->GetGroupDS();
       const double groupTol = 0.5 * sqrt( getMinElemSize2( srcGroup ));

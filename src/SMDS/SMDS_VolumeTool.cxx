@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -40,9 +40,13 @@
 #include <map>
 #include <limits>
 #include <cmath>
+#include <numeric>
+#include <algorithm>
 
 using namespace std;
 
+namespace
+{
 // ======================================================
 // Node indices in faces depending on volume orientation
 // making most faces normals external
@@ -132,8 +136,6 @@ static int Penta_nbN [] = { 3, 3, 4, 4, 4 };
 //        /  |       /  |
 //     N4+----------+N7 |
 //       |   |      |   |           HEXAHEDRON
-//       |   |      |   |
-//       |   |      |   |
 //       | N1+------|---+N2
 //       |  /       |  /
 //       | /        | /
@@ -155,6 +157,7 @@ static int Hexa_RE [6][5] = { // REVERSED -> EXTERNAL
   { 3, 7, 6, 2, 3 }, 
   { 0, 4, 7, 3, 0 }};
 static int Hexa_nbN [] = { 4, 4, 4, 4, 4, 4 };
+static int Hexa_oppF[] = { 1, 0, 4, 5, 2, 3 }; // oppopsite facet indices
 
 /*   
 //      N8 +------+ N9
@@ -279,7 +282,7 @@ static int QuadPyram_nbN [] = { 8, 6, 6, 6, 6 };
 */
 static int QuadPenta_F [5][9] = {  // FORWARD
   { 0, 6, 1, 7, 2, 8, 0, 0, 0 },
-  { 3,11, 5, 10,4, 9, 3, 3, 3 },
+  { 3, 11,5, 10,4, 9, 3, 3, 3 },
   { 0, 12,3, 9, 4, 13,1, 6, 0 },
   { 1, 13,4, 10,5, 14,2, 7, 1 },
   { 0, 8, 2, 14,5, 11,3, 12,0 }}; 
@@ -292,27 +295,27 @@ static int QuadPenta_RE [5][9] = { // REVERSED -> EXTERNAL
 static int QuadPenta_nbN [] = { 6, 6, 8, 8, 8 };
 
 /*
-//                 13
-//         N5+-----+-----+N6
-//          /|          /|
-//       12+ |       14+ |
-//        /  |        /  |
-//     N4+-----+-----+N7 |           QUADRATIC
-//       |   | 15    |   |           HEXAHEDRON
-//       |   |       |   |
-//       | 17+       |   +18
-//       |   |       |   |
-//       |   |       |   |
-//       |   |       |   |
-//     16+   |       +19 |
-//       |   |       |   |
-//       |   |     9 |   |
-//       | N1+-----+-|---+N2
-//       |  /        |  /
-//       | +8        | +10
-//       |/          |/
-//     N0+-----+-----+N3
-//             11
+//                 13                                                         
+//         N5+-----+-----+N6                          +-----+-----+
+//          /|          /|                           /|          /| 
+//       12+ |       14+ |                          + |   +25   + |    
+//        /  |        /  |                         /  |        /  |    
+//     N4+-----+-----+N7 |       QUADRATIC        +-----+-----+   |  Central nodes
+//       |   | 15    |   |       HEXAHEDRON       |   |       |   |  of tri-quadratic
+//       |   |       |   |                        |   |       |   |  HEXAHEDRON
+//       | 17+       |   +18                      |   +   22+ |   +  
+//       |   |       |   |                        |21 |       |   | 
+//       |   |       |   |                        | + | 26+   | + |    
+//       |   |       |   |                        |   |       |23 |    
+//     16+   |       +19 |                        +   | +24   +   |    
+//       |   |       |   |                        |   |       |   |    
+//       |   |     9 |   |                        |   |       |   |    
+//       | N1+-----+-|---+N2                      |   +-----+-|---+    
+//       |  /        |  /                         |  /        |  /  
+//       | +8        | +10                        | +   20+   | +      
+//       |/          |/                           |/          |/       
+//     N0+-----+-----+N3                          +-----+-----+    
+//             11                              
 */
 static int QuadHexa_F [6][9] = {  // FORWARD
   { 0, 8, 1, 9, 2, 10,3, 11,0 },   // all face normals are external,
@@ -350,8 +353,6 @@ static int TriQuadHexa_nbN [] = { 9, 9, 9, 9, 9, 9 };
 // ========================================================
 // to perform some calculations without linkage to CASCADE
 // ========================================================
-namespace
-{
 struct XYZ {
   double x;
   double y;
@@ -397,7 +398,7 @@ inline double XYZ::SquareMagnitude() {
   SMDS_VolumeTool::VolumeType quadToLinear(SMDS_VolumeTool::VolumeType quadType)
   {
     SMDS_VolumeTool::VolumeType linType = SMDS_VolumeTool::VolumeType( int(quadType)-4 );
-    const int nbCornersByQuad = SMDS_VolumeTool::NbCornerNodes( quadType );
+    const int           nbCornersByQuad = SMDS_VolumeTool::NbCornerNodes( quadType );
     if ( SMDS_VolumeTool::NbCornerNodes( linType ) == nbCornersByQuad )
       return linType;
 
@@ -411,14 +412,35 @@ inline double XYZ::SquareMagnitude() {
 
 } // namespace
 
+//================================================================================
+/*!
+ * \brief Saver/restorer of a SMDS_VolumeTool::myCurFace
+ */
+//================================================================================
+
+struct SMDS_VolumeTool::SaveFacet
+{
+  SMDS_VolumeTool::Facet  mySaved;
+  SMDS_VolumeTool::Facet& myToRestore;
+  SaveFacet( SMDS_VolumeTool::Facet& facet ): myToRestore( facet )
+  {
+    mySaved = facet;
+    mySaved.myNodes.swap( facet.myNodes );
+  }
+  ~SaveFacet()
+  {
+    if ( myToRestore.myIndex != mySaved.myIndex )
+      myToRestore = mySaved;
+    myToRestore.myNodes.swap( mySaved.myNodes );
+  }
+};
+
 //=======================================================================
 //function : SMDS_VolumeTool
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 SMDS_VolumeTool::SMDS_VolumeTool ()
-  : myVolumeNodes( NULL ),
-    myFaceNodes( NULL )
 {
   Set( 0 );
 }
@@ -430,8 +452,6 @@ SMDS_VolumeTool::SMDS_VolumeTool ()
 
 SMDS_VolumeTool::SMDS_VolumeTool (const SMDS_MeshElement* theVolume,
                                   const bool              ignoreCentralNodes)
-  : myVolumeNodes( NULL ),
-    myFaceNodes( NULL )
 {
   Set( theVolume, ignoreCentralNodes );
 }
@@ -443,11 +463,7 @@ SMDS_VolumeTool::SMDS_VolumeTool (const SMDS_MeshElement* theVolume,
 
 SMDS_VolumeTool::~SMDS_VolumeTool()
 {
-  if ( myVolumeNodes != NULL ) delete [] myVolumeNodes;
-  if ( myFaceNodes != NULL   ) delete [] myFaceNodes;
-
-  myFaceNodeIndices = NULL;
-  myVolumeNodes = myFaceNodes = NULL;
+  myCurFace.myNodeIndices = NULL;
 }
 
 //=======================================================================
@@ -455,8 +471,9 @@ SMDS_VolumeTool::~SMDS_VolumeTool()
 //purpose  : Set volume to iterate on
 //=======================================================================
 
-bool SMDS_VolumeTool::Set (const SMDS_MeshElement* theVolume,
-                           const bool              ignoreCentralNodes)
+bool SMDS_VolumeTool::Set (const SMDS_MeshElement*                  theVolume,
+                           const bool                               ignoreCentralNodes,
+                           const std::vector<const SMDS_MeshNode*>* otherNodes)
 {
   // reset fields
   myVolume = 0;
@@ -465,45 +482,51 @@ bool SMDS_VolumeTool::Set (const SMDS_MeshElement* theVolume,
 
   myVolForward = true;
   myNbFaces = 0;
-  myVolumeNbNodes = 0;
-  if (myVolumeNodes != NULL) {
-    delete [] myVolumeNodes;
-    myVolumeNodes = NULL;
-  }
+  myVolumeNodes.clear();
   myPolyIndices.clear();
+  myPolyQuantities.clear();
+  myPolyFacetOri.clear();
+  myFwdLinks.clear();
 
   myExternalFaces = false;
 
   myAllFacesNodeIndices_F  = 0;
-  //myAllFacesNodeIndices_FE = 0;
   myAllFacesNodeIndices_RE = 0;
   myAllFacesNbNodes        = 0;
 
-  myCurFace = -1;
-  myFaceNbNodes = 0;
-  myFaceNodeIndices = NULL;
-  if (myFaceNodes != NULL) {
-    delete [] myFaceNodes;
-    myFaceNodes = NULL;
-  }
+  myCurFace.myIndex = -1;
+  myCurFace.myNodeIndices = NULL;
+  myCurFace.myNodes.clear();
 
   // set volume data
   if ( !theVolume || theVolume->GetType() != SMDSAbs_Volume )
     return false;
 
   myVolume = theVolume;
-  if (myVolume->IsPoly())
-    myPolyedre = dynamic_cast<const SMDS_VtkVolume*>( myVolume );
-
   myNbFaces = theVolume->NbFaces();
-  myVolumeNbNodes = theVolume->NbNodes();
+  if ( myVolume->IsPoly() )
+  {
+    myPolyedre = dynamic_cast<const SMDS_VtkVolume*>( myVolume );
+    myPolyFacetOri.resize( myNbFaces, 0 );
+  }
 
   // set nodes
-  int iNode = 0;
-  myVolumeNodes = new const SMDS_MeshNode* [myVolumeNbNodes];
-  SMDS_ElemIteratorPtr nodeIt = myVolume->nodesIterator();
-  while ( nodeIt->more() )
-    myVolumeNodes[ iNode++ ] = static_cast<const SMDS_MeshNode*>( nodeIt->next() );
+  myVolumeNodes.resize( myVolume->NbNodes() );
+  if ( otherNodes )
+  {
+    if ( otherNodes->size() != myVolumeNodes.size() )
+      return ( myVolume = 0 );
+    for ( size_t i = 0; i < otherNodes->size(); ++i )
+      if ( ! ( myVolumeNodes[i] = (*otherNodes)[0] ))
+        return ( myVolume = 0 );
+  }
+  else
+  {
+    int iNode = 0;
+    SMDS_ElemIteratorPtr nodeIt = myVolume->nodesIterator();
+    while ( nodeIt->more() )
+      myVolumeNodes[ iNode++ ] = static_cast<const SMDS_MeshNode*>( nodeIt->next() );
+  }
 
   // check validity
   if ( !setFace(0) )
@@ -513,18 +536,19 @@ bool SMDS_VolumeTool::Set (const SMDS_MeshElement* theVolume,
   {
     // define volume orientation
     XYZ botNormal;
-    GetFaceNormal( 0, botNormal.x, botNormal.y, botNormal.z );
-    const SMDS_MeshNode* botNode = myVolumeNodes[ 0 ];
-    int topNodeIndex = myVolume->NbCornerNodes() - 1;
-    while ( !IsLinked( 0, topNodeIndex, /*ignoreMediumNodes=*/true )) --topNodeIndex;
-    const SMDS_MeshNode* topNode = myVolumeNodes[ topNodeIndex ];
-    XYZ upDir (topNode->X() - botNode->X(),
-               topNode->Y() - botNode->Y(),
-               topNode->Z() - botNode->Z() );
-    myVolForward = ( botNormal.Dot( upDir ) < 0 );
-
+    if ( GetFaceNormal( 0, botNormal.x, botNormal.y, botNormal.z ))
+    {
+      const SMDS_MeshNode* botNode = myVolumeNodes[ 0 ];
+      int topNodeIndex = myVolume->NbCornerNodes() - 1;
+      while ( !IsLinked( 0, topNodeIndex, /*ignoreMediumNodes=*/true )) --topNodeIndex;
+      const SMDS_MeshNode* topNode = myVolumeNodes[ topNodeIndex ];
+      XYZ upDir (topNode->X() - botNode->X(),
+                 topNode->Y() - botNode->Y(),
+                 topNode->Z() - botNode->Z() );
+      myVolForward = ( botNormal.Dot( upDir ) < 0 );
+    }
     if ( !myVolForward )
-      myCurFace = -1; // previous setFace(0) didn't take myVolForward into account
+      myCurFace.myIndex = -1; // previous setFace(0) didn't take myVolForward into account
   }
   return true;
 }
@@ -550,10 +574,10 @@ void SMDS_VolumeTool::Inverse ()
   }
 
   myVolForward = !myVolForward;
-  myCurFace = -1;
+  myCurFace.myIndex = -1;
 
   // inverse top and bottom faces
-  switch ( myVolumeNbNodes ) {
+  switch ( myVolumeNodes.size() ) {
   case 4:
     SWAP_NODES( myVolumeNodes, 1, 2 );
     break;
@@ -627,7 +651,7 @@ SMDS_VolumeTool::VolumeType SMDS_VolumeTool::GetVolumeType() const
   if ( myPolyedre )
     return POLYHEDA;
 
-  switch( myVolumeNbNodes ) {
+  switch( myVolumeNodes.size() ) {
   case 4: return TETRA;
   case 5: return PYRAM;
   case 6: return PENTA;
@@ -654,28 +678,18 @@ static double getTetraVolume(const SMDS_MeshNode* n1,
                              const SMDS_MeshNode* n3,
                              const SMDS_MeshNode* n4)
 {
-  double X1 = n1->X();
-  double Y1 = n1->Y();
-  double Z1 = n1->Z();
+  double p1[3], p2[3], p3[3], p4[3];
+  n1->GetXYZ( p1 );
+  n2->GetXYZ( p2 );
+  n3->GetXYZ( p3 );
+  n4->GetXYZ( p4 );
 
-  double X2 = n2->X();
-  double Y2 = n2->Y();
-  double Z2 = n2->Z();
-
-  double X3 = n3->X();
-  double Y3 = n3->Y();
-  double Z3 = n3->Z();
-
-  double X4 = n4->X();
-  double Y4 = n4->Y();
-  double Z4 = n4->Z();
-
-  double Q1 = -(X1-X2)*(Y3*Z4-Y4*Z3);
-  double Q2 =  (X1-X3)*(Y2*Z4-Y4*Z2);
-  double R1 = -(X1-X4)*(Y2*Z3-Y3*Z2);
-  double R2 = -(X2-X3)*(Y1*Z4-Y4*Z1);
-  double S1 =  (X2-X4)*(Y1*Z3-Y3*Z1);
-  double S2 = -(X3-X4)*(Y1*Z2-Y2*Z1);
+  double Q1 = -(p1[ 0 ]-p2[ 0 ])*(p3[ 1 ]*p4[ 2 ]-p4[ 1 ]*p3[ 2 ]);
+  double Q2 =  (p1[ 0 ]-p3[ 0 ])*(p2[ 1 ]*p4[ 2 ]-p4[ 1 ]*p2[ 2 ]);
+  double R1 = -(p1[ 0 ]-p4[ 0 ])*(p2[ 1 ]*p3[ 2 ]-p3[ 1 ]*p2[ 2 ]);
+  double R2 = -(p2[ 0 ]-p3[ 0 ])*(p1[ 1 ]*p4[ 2 ]-p4[ 1 ]*p1[ 2 ]);
+  double S1 =  (p2[ 0 ]-p4[ 0 ])*(p1[ 1 ]*p3[ 2 ]-p3[ 1 ]*p1[ 2 ]);
+  double S2 = -(p3[ 0 ]-p4[ 0 ])*(p1[ 1 ]*p2[ 2 ]-p2[ 1 ]*p1[ 2 ]);
 
   return (Q1+Q2+R1+R2+S1+S2)/6.0;
 }
@@ -698,23 +712,21 @@ double SMDS_VolumeTool::GetSize() const
 
     // split a polyhedron into tetrahedrons
 
-    int saveCurFace = myCurFace;
+    SaveFacet savedFacet( myCurFace );
     SMDS_VolumeTool* me = const_cast< SMDS_VolumeTool* > ( this );
     for ( int f = 0; f < NbFaces(); ++f )
     {
       me->setFace( f );
-      XYZ area (0,0,0), p1( myFaceNodes[0] );
-      for ( int n = 0; n < myFaceNbNodes; ++n )
+      XYZ area (0,0,0), p1( myCurFace.myNodes[0] );
+      for ( int n = 0; n < myCurFace.myNbNodes; ++n )
       {
-        XYZ p2( myFaceNodes[ n+1 ]);
+        XYZ p2( myCurFace.myNodes[ n+1 ]);
         area = area + p1.Crossed( p2 );
         p1 = p2;
       }
       V += p1.Dot( area );
     }
     V /= 6;
-    if ( saveCurFace > -1 && saveCurFace != myCurFace )
-      me->setFace( myCurFace );
   }
   else 
   {
@@ -845,14 +857,14 @@ bool SMDS_VolumeTool::GetBaryCenter(double & X, double & Y, double & Z) const
   if ( !myVolume )
     return false;
 
-  for ( int i = 0; i < myVolumeNbNodes; i++ ) {
+  for ( size_t i = 0; i < myVolumeNodes.size(); i++ ) {
     X += myVolumeNodes[ i ]->X();
     Y += myVolumeNodes[ i ]->Y();
     Z += myVolumeNodes[ i ]->Z();
   }
-  X /= myVolumeNbNodes;
-  Y /= myVolumeNbNodes;
-  Z /= myVolumeNbNodes;
+  X /= myVolumeNodes.size();
+  Y /= myVolumeNodes.size();
+  Z /= myVolumeNodes.size();
 
   return true;
 }
@@ -876,7 +888,7 @@ bool SMDS_VolumeTool::IsOut(double X, double Y, double Z, double tol) const
     if ( !IsFaceExternal( iF ))
       faceNormal = XYZ() - faceNormal; // reverse
 
-    XYZ face2p( p - XYZ( myFaceNodes[0] ));
+    XYZ face2p( p - XYZ( myCurFace.myNodes[0] ));
     if ( face2p.Dot( faceNormal ) > tol )
       return true;
   }
@@ -891,7 +903,7 @@ bool SMDS_VolumeTool::IsOut(double X, double Y, double Z, double tol) const
 void SMDS_VolumeTool::SetExternalNormal ()
 {
   myExternalFaces = true;
-  myCurFace = -1;
+  myCurFace.myIndex = -1;
 }
 
 //=======================================================================
@@ -901,9 +913,9 @@ void SMDS_VolumeTool::SetExternalNormal ()
 
 int SMDS_VolumeTool::NbFaceNodes( int faceIndex ) const
 {
-    if ( !setFace( faceIndex ))
-      return 0;
-    return myFaceNbNodes;
+  if ( !setFace( faceIndex ))
+    return 0;
+  return myCurFace.myNbNodes;
 }
 
 //=======================================================================
@@ -918,7 +930,7 @@ const SMDS_MeshNode** SMDS_VolumeTool::GetFaceNodes( int faceIndex ) const
 {
   if ( !setFace( faceIndex ))
     return 0;
-  return myFaceNodes;
+  return &myCurFace.myNodes[0];
 }
 
 //=======================================================================
@@ -934,15 +946,7 @@ const int* SMDS_VolumeTool::GetFaceNodesIndices( int faceIndex ) const
   if ( !setFace( faceIndex ))
     return 0;
 
-  if (myPolyedre)
-  {
-    SMDS_VolumeTool* me = const_cast< SMDS_VolumeTool* > ( this );
-    me->myPolyIndices.resize( myFaceNbNodes + 1 );
-    me->myFaceNodeIndices = & me->myPolyIndices[0];
-    for ( int i = 0; i <= myFaceNbNodes; ++i )
-      me->myFaceNodeIndices[i] = myVolume->GetNodeIndex( myFaceNodes[i] );
-  }
-  return myFaceNodeIndices;
+  return myCurFace.myNodeIndices;
 }
 
 //=======================================================================
@@ -957,9 +961,42 @@ bool SMDS_VolumeTool::GetFaceNodes (int                        faceIndex,
     return false;
 
   theFaceNodes.clear();
-  theFaceNodes.insert( myFaceNodes, myFaceNodes + myFaceNbNodes );
+  theFaceNodes.insert( myCurFace.myNodes.begin(), myCurFace.myNodes.end() );
 
   return true;
+}
+
+namespace
+{
+  struct NLink : public std::pair<int,int>
+  {
+    int myOri;
+    NLink(const SMDS_MeshNode* n1=0, const SMDS_MeshNode* n2=0, int ori=1 )
+    {
+      if ( n1 )
+      {
+        if (( myOri = ( n1->GetID() < n2->GetID() )))
+        {
+          first  = n1->GetID();
+          second = n2->GetID();
+        }
+        else
+        {
+          myOri  = -1;
+          first  = n2->GetID();
+          second = n1->GetID();
+        }
+        myOri *= ori;
+      }
+      else
+      {
+        myOri = first = second = 0;
+      }
+    }
+    //int Node1() const { return myOri == -1 ? second : first; }
+
+    //bool IsSameOri( const std::pair<int,int>& link ) const { return link.first == Node1(); }
+  };
 }
 
 //=======================================================================
@@ -972,39 +1009,179 @@ bool SMDS_VolumeTool::IsFaceExternal( int faceIndex ) const
   if ( myExternalFaces || !myVolume )
     return true;
 
-  if (myVolume->IsPoly()) {
-    XYZ aNormal, baryCenter, p0 (myPolyedre->GetFaceNode(faceIndex + 1, 1));
-    GetFaceNormal(faceIndex, aNormal.x, aNormal.y, aNormal.z);
-    GetBaryCenter(baryCenter.x, baryCenter.y, baryCenter.z);
-    XYZ insideVec (baryCenter - p0);
-    if (insideVec.Dot(aNormal) > 0)
-      return false;
+  if ( !myPolyedre ) // all classical volumes have external facet normals
     return true;
+
+  SMDS_VolumeTool* me = const_cast< SMDS_VolumeTool* >( this );
+
+  if ( myPolyFacetOri[ faceIndex ])
+    return myPolyFacetOri[ faceIndex ] > 0;
+
+  int ori = 0; // -1-in, +1-out, 0-undef
+  double minProj, maxProj;
+  if ( projectNodesToNormal( faceIndex, minProj, maxProj ))
+  {
+    // all nodes are on the same side of the facet
+    ori = ( minProj < 0 ? +1 : -1 );
+    me->myPolyFacetOri[ faceIndex ] = ori;
+
+    if ( !myFwdLinks.empty() ) // concave polyhedron; collect oriented links
+      for ( int i = 0; i < myCurFace.myNbNodes; ++i )
+      {
+        NLink link( myCurFace.myNodes[i], myCurFace.myNodes[i+1], ori );
+        me->myFwdLinks.insert( make_pair( link, link.myOri ));
+      }
+    return ori > 0;
   }
 
-  // switch ( myVolumeNbNodes ) {
-  // case 4:
-  // case 5:
-  // case 10:
-  // case 13:
-  //   // only the bottom of a reversed tetrahedron can be internal
-  //   return ( myVolForward || faceIndex != 0 );
-  // case 6:
-  // case 15:
-  // case 12:
-  //   // in a forward prism, the top is internal, in a reversed one - bottom
-  //   return ( myVolForward ? faceIndex != 1 : faceIndex != 0 );
-  // case 8:
-  // case 20:
-  // case 27: {
-  //   // in a forward hexahedron, even face normal is external, odd - internal
-  //   bool odd = faceIndex % 2;
-  //   return ( myVolForward ? !odd : odd );
+  SaveFacet savedFacet( myCurFace );
+
+  // concave polyhedron
+
+  if ( myFwdLinks.empty() ) // get links of the least ambiguously oriented facet
+  {
+    for ( size_t i = 0; i < myPolyFacetOri.size() && !ori; ++i )
+      ori = myPolyFacetOri[ i ];
+
+    if ( !ori ) // none facet is oriented yet
+    {
+      // find the least ambiguously oriented facet
+      int faceMostConvex = -1;
+      std::map< double, int > convexity2face;
+      for ( size_t iF = 0; iF < myPolyFacetOri.size() && faceMostConvex < 0; ++iF )
+      {
+        if ( projectNodesToNormal( iF, minProj, maxProj ))
+        {
+          // all nodes are on the same side of the facet
+          me->myPolyFacetOri[ iF ] = ( minProj < 0 ? +1 : -1 );
+          faceMostConvex = iF;
+        }
+        else
+        {
+          ori = ( -minProj < maxProj ? -1 : +1 );
+          double convexity = std::min( -minProj, maxProj ) / std::max( -minProj, maxProj );
+          convexity2face.insert( make_pair( convexity, iF * ori ));
+        }
+      }
+      if ( faceMostConvex < 0 ) // none facet has nodes on the same side
+      {
+        // use the least ambiguous facet
+        faceMostConvex = convexity2face.begin()->second;
+        ori = ( faceMostConvex < 0 ? -1 : +1 );
+        faceMostConvex = std::abs( faceMostConvex );
+        me->myPolyFacetOri[ faceMostConvex ] = ori;
+      }
+    }
+    // collect links of the oriented facets in myFwdLinks
+    for ( size_t iF = 0; iF < myPolyFacetOri.size(); ++iF )
+    {
+      ori = myPolyFacetOri[ iF ];
+      if ( !ori ) continue;
+      setFace( iF );
+      for ( int i = 0; i < myCurFace.myNbNodes; ++i )
+      {
+        NLink link( myCurFace.myNodes[i], myCurFace.myNodes[i+1], ori );
+        me->myFwdLinks.insert( make_pair( link, link.myOri ));
+      }
+    }
+  }
+
+  // compare orientation of links of the facet with myFwdLinks
+  ori = 0;
+  setFace( faceIndex );
+  vector< NLink > links( myCurFace.myNbNodes ), links2;
+  for ( int i = 0; i < myCurFace.myNbNodes && !ori; ++i )
+  {
+    NLink link( myCurFace.myNodes[i], myCurFace.myNodes[i+1] );
+    std::map<Link, int>::const_iterator l2o = myFwdLinks.find( link );
+    if ( l2o != myFwdLinks.end() )
+      ori = link.myOri * l2o->second * -1;
+    links[ i ] = link;
+  }
+  while ( !ori ) // the facet has no common links with already oriented facets
+  {
+    // orient and collect links of other non-oriented facets
+    for ( size_t iF = 0; iF < myPolyFacetOri.size(); ++iF )
+    {
+      if ( myPolyFacetOri[ iF ] ) continue; // already oriented
+      setFace( iF );
+      links2.clear();
+      ori = 0;
+      for ( int i = 0; i < myCurFace.myNbNodes && !ori; ++i )
+      {
+        NLink link( myCurFace.myNodes[i], myCurFace.myNodes[i+1] );
+        std::map<Link, int>::const_iterator l2o = myFwdLinks.find( link );
+        if ( l2o != myFwdLinks.end() )
+          ori = link.myOri * l2o->second * -1;
+        links2.push_back( link );
+      }
+      if ( ori ) // one more facet oriented
+      {
+        me->myPolyFacetOri[ iF ] = ori;
+        for ( size_t i = 0; i < links2.size(); ++i )
+          me->myFwdLinks.insert( make_pair( links2[i], links2[i].myOri * ori ));
+        break;
+      }
+    }
+    if ( !ori )
+      return false; // error in algorithm: infinite loop
+
+    // try to orient the facet again
+    ori = 0;
+    for ( size_t i = 0; i < links.size() && !ori; ++i )
+    {
+      std::map<Link, int>::const_iterator l2o = myFwdLinks.find( links[i] );
+      if ( l2o != myFwdLinks.end() )
+        ori = links[i].myOri * l2o->second * -1;
+    }
+    me->myPolyFacetOri[ faceIndex ] = ori;
+  }
+
+  return ori > 0;
+}
+
+//=======================================================================
+//function : projectNodesToNormal
+//purpose  : compute min and max projections of all nodes to normal of a facet.
+//=======================================================================
+
+bool SMDS_VolumeTool::projectNodesToNormal( int     faceIndex,
+                                            double& minProj,
+                                            double& maxProj ) const
+{
+  minProj = std::numeric_limits<double>::max();
+  maxProj = std::numeric_limits<double>::min();
+
+  XYZ normal;
+  if ( !GetFaceNormal( faceIndex, normal.x, normal.y, normal.z ))
+    return false;
+  XYZ p0 ( myCurFace.myNodes[0] );
+  for ( size_t i = 0; i < myVolumeNodes.size(); ++i )
+  {
+    if ( std::find( myCurFace.myNodes.begin() + 1,
+                    myCurFace.myNodes.end(),
+                    myVolumeNodes[ i ] ) != myCurFace.myNodes.end() )
+      continue; // node of the faceIndex-th facet
+
+    double proj = normal.Dot( XYZ( myVolumeNodes[ i ]) - p0 );
+    if ( proj < minProj ) minProj = proj;
+    if ( proj > maxProj ) maxProj = proj;
+  }
+  const double tol = 1e-7;
+  minProj += tol;
+  maxProj -= tol;
+  bool diffSize = ( minProj * maxProj < 0 );
+  // if ( diffSize )
+  // {
+  //   minProj = -minProj;
   // }
-  // default:;
+  // else if ( minProj < 0 )
+  // {
+  //   minProj = -minProj;
+  //   maxProj = -maxProj;
   // }
-  // return false;
-  return true;
+
+  return !diffSize; // ? 0 : (minProj >= 0);
 }
 
 //=======================================================================
@@ -1017,16 +1194,16 @@ bool SMDS_VolumeTool::GetFaceNormal (int faceIndex, double & X, double & Y, doub
   if ( !setFace( faceIndex ))
     return false;
 
-  const int iQuad = ( myFaceNbNodes > 6 && !myPolyedre ) ? 2 : 1;
-  XYZ p1 ( myFaceNodes[0*iQuad] );
-  XYZ p2 ( myFaceNodes[1*iQuad] );
-  XYZ p3 ( myFaceNodes[2*iQuad] );
+  const int iQuad = ( !myPolyedre && myCurFace.myNbNodes > 6 ) ? 2 : 1;
+  XYZ p1 ( myCurFace.myNodes[0*iQuad] );
+  XYZ p2 ( myCurFace.myNodes[1*iQuad] );
+  XYZ p3 ( myCurFace.myNodes[2*iQuad] );
   XYZ aVec12( p2 - p1 );
   XYZ aVec13( p3 - p1 );
   XYZ cross = aVec12.Crossed( aVec13 );
 
-  if ( myFaceNbNodes >3*iQuad ) {
-    XYZ p4 ( myFaceNodes[3*iQuad] );
+  if ( myCurFace.myNbNodes >3*iQuad ) {
+    XYZ p4 ( myCurFace.myNodes[3*iQuad] );
     XYZ aVec14( p4 - p1 );
     XYZ cross2 = aVec13.Crossed( aVec14 );
     cross = cross + cross2;
@@ -1055,11 +1232,11 @@ bool SMDS_VolumeTool::GetFaceBaryCenter (int faceIndex, double & X, double & Y, 
     return false;
 
   X = Y = Z = 0.0;
-  for ( int i = 0; i < myFaceNbNodes; ++i )
+  for ( int i = 0; i < myCurFace.myNbNodes; ++i )
   {
-    X += myFaceNodes[i]->X() / myFaceNbNodes;
-    Y += myFaceNodes[i]->Y() / myFaceNbNodes;
-    Z += myFaceNodes[i]->Z() / myFaceNbNodes;
+    X += myCurFace.myNodes[i]->X() / myCurFace.myNbNodes;
+    Y += myCurFace.myNodes[i]->Y() / myCurFace.myNbNodes;
+    Z += myCurFace.myNodes[i]->Z() / myCurFace.myNbNodes;
   }
   return true;
 }
@@ -1071,27 +1248,36 @@ bool SMDS_VolumeTool::GetFaceBaryCenter (int faceIndex, double & X, double & Y, 
 
 double SMDS_VolumeTool::GetFaceArea( int faceIndex ) const
 {
-  if (myVolume->IsPoly()) {
-    MESSAGE("Warning: attempt to obtain area of a face of polyhedral volume");
-    return 0;
-  }
-
+  double area = 0;
   if ( !setFace( faceIndex ))
-    return 0;
+    return area;
 
-  XYZ p1 ( myFaceNodes[0] );
-  XYZ p2 ( myFaceNodes[1] );
-  XYZ p3 ( myFaceNodes[2] );
+  XYZ p1 ( myCurFace.myNodes[0] );
+  XYZ p2 ( myCurFace.myNodes[1] );
+  XYZ p3 ( myCurFace.myNodes[2] );
   XYZ aVec12( p2 - p1 );
   XYZ aVec13( p3 - p1 );
-  double area = aVec12.Crossed( aVec13 ).Magnitude() * 0.5;
+  area += aVec12.Crossed( aVec13 ).Magnitude();
 
-  if ( myFaceNbNodes == 4 ) {
-    XYZ p4 ( myFaceNodes[3] );
-    XYZ aVec14( p4 - p1 );
-    area += aVec14.Crossed( aVec13 ).Magnitude() * 0.5;
+  if (myVolume->IsPoly())
+  {
+    for ( int i = 3; i < myCurFace.myNbNodes; ++i )
+    {
+      XYZ pI ( myCurFace.myNodes[i] );
+      XYZ aVecI( pI - p1 );
+      area += aVec13.Crossed( aVecI ).Magnitude();
+      aVec13 = aVecI;
+    }
   }
-  return area;
+  else
+  {
+    if ( myCurFace.myNbNodes == 4 ) {
+      XYZ p4 ( myCurFace.myNodes[3] );
+      XYZ aVec14( p4 - p1 );
+      area += aVec14.Crossed( aVec13 ).Magnitude();
+    }
+  }
+  return area / 2;
 }
 
 //================================================================================
@@ -1102,7 +1288,7 @@ double SMDS_VolumeTool::GetFaceArea( int faceIndex ) const
 
 int SMDS_VolumeTool::GetCenterNodeIndex( int faceIndex ) const
 {
-  if ( myAllFacesNbNodes && myVolumeNbNodes == 27 ) // classic element with 27 nodes
+  if ( myAllFacesNbNodes && myVolumeNodes.size() == 27 ) // classic element with 27 nodes
   {
     switch ( faceIndex ) {
     case 0: return 20;
@@ -1130,7 +1316,7 @@ int SMDS_VolumeTool::GetOppFaceIndex( int faceIndex ) const
   const int nbHoriFaces = 2;
 
   if ( faceIndex >= 0 && faceIndex < NbFaces() ) {
-    switch ( myVolumeNbNodes ) {
+    switch ( myVolumeNodes.size() ) {
     case 6:
     case 15:
       if ( faceIndex == 0 || faceIndex == 1 )
@@ -1147,17 +1333,22 @@ int SMDS_VolumeTool::GetOppFaceIndex( int faceIndex ) const
       break;
     case 20:
     case 27:
-      if ( faceIndex <= 1 ) // top or bottom
-        ind = 1 - faceIndex;
-      else {
-        const int nbSideFaces = myAllFacesNbNodes[0] / 2;
-        ind = ( faceIndex - nbHoriFaces + nbSideFaces/2 ) % nbSideFaces + nbHoriFaces;
-      }
+      ind = GetOppFaceIndexOfHex( faceIndex );
       break;
     default:;
     }
   }
   return ind;
+}
+
+//=======================================================================
+//function : GetOppFaceIndexOfHex
+//purpose  : Return index of the opposite face of the hexahedron
+//=======================================================================
+
+int SMDS_VolumeTool::GetOppFaceIndexOfHex( int faceIndex )
+{
+  return Hexa_oppF[ faceIndex ];
 }
 
 //=======================================================================
@@ -1178,31 +1369,42 @@ bool SMDS_VolumeTool::IsLinked (const SMDS_MeshNode* theNode1,
       MESSAGE("Warning: bad volumic element");
       return false;
     }
-    bool isLinked = false;
-    int iface;
-    for (iface = 1; iface <= myNbFaces && !isLinked; iface++) {
-      int inode, nbFaceNodes = myPolyedre->NbFaceNodes(iface);
-
-      for (inode = 1; inode <= nbFaceNodes && !isLinked; inode++) {
-        const SMDS_MeshNode* curNode = myPolyedre->GetFaceNode(iface, inode);
-
-        if (curNode == theNode1 || curNode == theNode2) {
-          int inextnode = (inode == nbFaceNodes) ? 1 : inode + 1;
-          const SMDS_MeshNode* nextNode = myPolyedre->GetFaceNode(iface, inextnode);
-
-          if ((curNode == theNode1 && nextNode == theNode2) ||
-              (curNode == theNode2 && nextNode == theNode1)) {
-            isLinked = true;
-          }
-        }
+    if ( !myAllFacesNbNodes ) {
+      SMDS_VolumeTool*  me = const_cast< SMDS_VolumeTool* >( this );
+      me->myPolyQuantities = myPolyedre->GetQuantities();
+      myAllFacesNbNodes    = &myPolyQuantities[0];
+    }
+    int from, to = 0, d1 = 1, d2 = 2;
+    if ( myPolyedre->IsQuadratic() ) {
+      if ( theIgnoreMediumNodes ) {
+        d1 = 2; d2 = 0;
+      }
+    } else {
+      d2 = 0;
+    }
+    vector<const SMDS_MeshNode*>::const_iterator i;
+    for (int iface = 0; iface < myNbFaces; iface++)
+    {
+      from = to;
+      to  += myPolyQuantities[iface];
+      i    = std::find( myVolumeNodes.begin() + from, myVolumeNodes.begin() + to, theNode1 );
+      if ( i != myVolumeNodes.end() )
+      {
+        if ((  theNode2 == *( i-d1 ) ||
+               theNode2 == *( i+d1 )))
+          return true;
+        if (( d2 ) &&
+            (( theNode2 == *( i-d2 ) ||
+               theNode2 == *( i+d2 ))))
+          return true;
       }
     }
-    return isLinked;
+    return false;
   }
 
   // find nodes indices
   int i1 = -1, i2 = -1, nbFound = 0;
-  for ( int i = 0; i < myVolumeNbNodes && nbFound < 2; i++ )
+  for ( size_t i = 0; i < myVolumeNodes.size() && nbFound < 2; i++ )
   {
     if ( myVolumeNodes[ i ] == theNode1 )
       i1 = i, ++nbFound;
@@ -1230,7 +1432,7 @@ bool SMDS_VolumeTool::IsLinked (const int theNode1Index,
   int minInd = min( theNode1Index, theNode2Index );
   int maxInd = max( theNode1Index, theNode2Index );
 
-  if ( minInd < 0 || maxInd > myVolumeNbNodes - 1 || maxInd == minInd )
+  if ( minInd < 0 || maxInd > (int)myVolumeNodes.size() - 1 || maxInd == minInd )
     return false;
 
   VolumeType type = GetVolumeType();
@@ -1347,7 +1549,7 @@ bool SMDS_VolumeTool::IsLinked (const int theNode1Index,
 int SMDS_VolumeTool::GetNodeIndex(const SMDS_MeshNode* theNode) const
 {
   if ( myVolume ) {
-    for ( int i = 0; i < myVolumeNbNodes; i++ ) {
+    for ( size_t i = 0; i < myVolumeNodes.size(); i++ ) {
       if ( myVolumeNodes[ i ] == theNode )
         return i;
     }
@@ -1366,24 +1568,32 @@ int SMDS_VolumeTool::GetNodeIndex(const SMDS_MeshNode* theNode) const
 int SMDS_VolumeTool::GetAllExistingFaces(vector<const SMDS_MeshElement*> & faces) const
 {
   faces.clear();
-  for ( int iF = 0; iF < NbFaces(); ++iF ) {
-    const SMDS_MeshFace* face = 0;
-    const SMDS_MeshNode** nodes = GetFaceNodes( iF );
-    switch ( NbFaceNodes( iF )) {
-    case 3:
-      face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2] ); break;
-    case 4:
-      face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2], nodes[3] ); break;
-    case 6:
-      face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2],
-                                  nodes[3], nodes[4], nodes[5]); break;
-    case 8:
-      face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2], nodes[3],
-                                  nodes[4], nodes[5], nodes[6], nodes[7]); break;
+  SaveFacet savedFacet( myCurFace );
+  if ( IsPoly() )
+    for ( int iF = 0; iF < NbFaces(); ++iF ) {
+      if ( setFace( iF ))
+        if ( const SMDS_MeshElement* face = SMDS_Mesh::FindFace( myCurFace.myNodes ))
+          faces.push_back( face );
     }
-    if ( face )
-      faces.push_back( face );
-  }
+  else
+    for ( int iF = 0; iF < NbFaces(); ++iF ) {
+      const SMDS_MeshFace* face = 0;
+      const SMDS_MeshNode** nodes = GetFaceNodes( iF );
+      switch ( NbFaceNodes( iF )) {
+      case 3:
+        face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2] ); break;
+      case 4:
+        face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2], nodes[3] ); break;
+      case 6:
+        face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2],
+                                    nodes[3], nodes[4], nodes[5]); break;
+      case 8:
+        face = SMDS_Mesh::FindFace( nodes[0], nodes[1], nodes[2], nodes[3],
+                                    nodes[4], nodes[5], nodes[6], nodes[7]); break;
+      }
+      if ( face )
+        faces.push_back( face );
+    }
   return faces.size();
 }
 
@@ -1391,17 +1601,17 @@ int SMDS_VolumeTool::GetAllExistingFaces(vector<const SMDS_MeshElement*> & faces
 //================================================================================
 /*!
  * \brief Fill vector with boundary edges existing in the mesh
-  * \param edges - vector of found edges
-  * \retval int - nb of found faces
+ * \param edges - vector of found edges
+ * \retval int - nb of found faces
  */
 //================================================================================
 
 int SMDS_VolumeTool::GetAllExistingEdges(vector<const SMDS_MeshElement*> & edges) const
 {
   edges.clear();
-  edges.reserve( myVolumeNbNodes * 2 );
-  for ( int i = 0; i < myVolumeNbNodes-1; ++i ) {
-    for ( int j = i + 1; j < myVolumeNbNodes; ++j ) {
+  edges.reserve( myVolumeNodes.size() * 2 );
+  for ( size_t i = 0; i < myVolumeNodes.size()-1; ++i ) {
+    for ( size_t j = i + 1; j < myVolumeNodes.size(); ++j ) {
       if ( IsLinked( i, j )) {
         const SMDS_MeshElement* edge =
           SMDS_Mesh::FindEdge( myVolumeNodes[i], myVolumeNodes[j] );
@@ -1424,39 +1634,57 @@ double SMDS_VolumeTool::MinLinearSize2() const
   double minSize = 1e+100;
   int iQ = myVolume->IsQuadratic() ? 2 : 1;
 
-  // store current face data
-  int curFace = myCurFace, nbN = myFaceNbNodes;
-  int* ind = myFaceNodeIndices;
-  myFaceNodeIndices = NULL;
-  const SMDS_MeshNode** nodes = myFaceNodes;
-  myFaceNodes = NULL;
-  
+  SaveFacet savedFacet( myCurFace );
+
   // it seems that compute distance twice is faster than organization of a sole computing
-  myCurFace = -1;
+  myCurFace.myIndex = -1;
   for ( int iF = 0; iF < myNbFaces; ++iF )
   {
     setFace( iF );
-    for ( int iN = 0; iN < myFaceNbNodes; iN += iQ )
+    for ( int iN = 0; iN < myCurFace.myNbNodes; iN += iQ )
     {
-      XYZ n1( myFaceNodes[ iN ]);
-      XYZ n2( myFaceNodes[(iN + iQ) % myFaceNbNodes]);
+      XYZ n1( myCurFace.myNodes[ iN ]);
+      XYZ n2( myCurFace.myNodes[(iN + iQ) % myCurFace.myNbNodes]);
       minSize = std::min( minSize, (n1 - n2).SquareMagnitude());
     }
   }
-  // restore current face data
-  myCurFace = curFace;
-  myFaceNbNodes = nbN;
-  myFaceNodeIndices = ind;
-  delete [] myFaceNodes; myFaceNodes = nodes;
 
   return minSize;
 }
 
 //================================================================================
 /*!
- * \brief check that only one volume is build on the face nodes
- *
- * If a face is shared by one of <ignoreVolumes>, it is considered free
+ * \brief Return maximal square distance between connected corner nodes
+ */
+//================================================================================
+
+double SMDS_VolumeTool::MaxLinearSize2() const
+{
+  double maxSize = -1e+100;
+  int iQ = myVolume->IsQuadratic() ? 2 : 1;
+
+  SaveFacet savedFacet( myCurFace );
+  
+  // it seems that compute distance twice is faster than organization of a sole computing
+  myCurFace.myIndex = -1;
+  for ( int iF = 0; iF < myNbFaces; ++iF )
+  {
+    setFace( iF );
+    for ( int iN = 0; iN < myCurFace.myNbNodes; iN += iQ )
+    {
+      XYZ n1( myCurFace.myNodes[ iN ]);
+      XYZ n2( myCurFace.myNodes[(iN + iQ) % myCurFace.myNbNodes]);
+      maxSize = std::max( maxSize, (n1 - n2).SquareMagnitude());
+    }
+  }
+
+  return maxSize;
+}
+
+//================================================================================
+/*!
+ * \brief fast check that only one volume is build on the face nodes
+ *        This check is valid for conformal meshes only
  */
 //================================================================================
 
@@ -1464,11 +1692,58 @@ bool SMDS_VolumeTool::IsFreeFace( int faceIndex, const SMDS_MeshElement** otherV
 {
   const bool isFree = true;
 
+  if ( !setFace( faceIndex ))
+    return !isFree;
+
+  const SMDS_MeshNode** nodes = GetFaceNodes( faceIndex );
+
+  const int  di = myVolume->IsQuadratic() ? 2 : 1;
+  const int nbN = ( myCurFace.myNbNodes/di <= 4 && !IsPoly()) ? 3 : myCurFace.myNbNodes/di; // nb nodes to check
+
+  SMDS_ElemIteratorPtr eIt = nodes[0]->GetInverseElementIterator( SMDSAbs_Volume );
+  while ( eIt->more() )
+  {
+    const SMDS_MeshElement* vol = eIt->next();
+    if ( vol == myVolume )
+      continue;
+    int iN;
+    for ( iN = 1; iN < nbN; ++iN )
+      if ( vol->GetNodeIndex( nodes[ iN*di ]) < 0 )
+        break;
+    if ( iN == nbN ) // nbN nodes are shared with vol
+    {
+      // if ( vol->IsPoly() || vol->NbFaces() > 6 ) // vol is polyhed or hex prism 
+      // {
+      //   int nb = myCurFace.myNbNodes;
+      //   if ( myVolume->GetEntityType() != vol->GetEntityType() )
+      //     nb -= ( GetCenterNodeIndex(0) > 0 );
+      //   set<const SMDS_MeshNode*> faceNodes( nodes, nodes + nb );
+      //   if ( SMDS_VolumeTool( vol ).GetFaceIndex( faceNodes ) < 0 )
+      //     continue;
+      // }
+      if ( otherVol ) *otherVol = vol;
+      return !isFree;
+    }
+  }
+  if ( otherVol ) *otherVol = 0;
+  return isFree;
+}
+
+//================================================================================
+/*!
+ * \brief Thorough check that only one volume is build on the face nodes
+ */
+//================================================================================
+
+bool SMDS_VolumeTool::IsFreeFaceAdv( int faceIndex, const SMDS_MeshElement** otherVol/*=0*/ ) const
+{
+  const bool isFree = true;
+
   if (!setFace( faceIndex ))
     return !isFree;
 
   const SMDS_MeshNode** nodes = GetFaceNodes( faceIndex );
-  const int nbFaceNodes = myFaceNbNodes;
+  const int nbFaceNodes = myCurFace.myNbNodes;
 
   // evaluate nb of face nodes shared by other volumes
   int maxNbShared = -1;
@@ -1580,16 +1855,40 @@ bool SMDS_VolumeTool::IsFreeFace( int faceIndex, const SMDS_MeshElement** otherV
 //purpose  : Return index of a face formed by theFaceNodes
 //=======================================================================
 
-int SMDS_VolumeTool::GetFaceIndex( const set<const SMDS_MeshNode*>& theFaceNodes ) const
+int SMDS_VolumeTool::GetFaceIndex( const set<const SMDS_MeshNode*>& theFaceNodes,
+                                   const int                        theFaceIndexHint ) const
 {
-  for ( int iFace = 0; iFace < myNbFaces; iFace++ ) {
-    const SMDS_MeshNode** nodes = GetFaceNodes( iFace );
-    int nbFaceNodes = NbFaceNodes( iFace );
-    set<const SMDS_MeshNode*> nodeSet;
-    for ( int iNode = 0; iNode < nbFaceNodes; iNode++ )
-      nodeSet.insert( nodes[ iNode ] );
-    if ( theFaceNodes == nodeSet )
-      return iFace;
+  if ( theFaceIndexHint >= 0 )
+  {
+    int nbNodes = NbFaceNodes( theFaceIndexHint );
+    if ( nbNodes == (int) theFaceNodes.size() )
+    {
+      const SMDS_MeshNode** nodes = GetFaceNodes( theFaceIndexHint );
+      while ( nbNodes )
+        if ( theFaceNodes.count( nodes[ nbNodes-1 ]))
+          --nbNodes;
+        else
+          break;
+      if ( nbNodes == 0 )
+        return theFaceIndexHint;
+    }
+  }
+  for ( int iFace = 0; iFace < myNbFaces; iFace++ )
+  {
+    if ( iFace == theFaceIndexHint )
+      continue;
+    int nbNodes = NbFaceNodes( iFace );
+    if ( nbNodes == (int) theFaceNodes.size() )
+    {
+      const SMDS_MeshNode** nodes = GetFaceNodes( iFace );
+      while ( nbNodes )
+        if ( theFaceNodes.count( nodes[ nbNodes-1 ]))
+          --nbNodes;
+        else
+          break;
+      if ( nbNodes == 0 )
+        return iFace;
+    }
   }
   return -1;
 }
@@ -1623,18 +1922,13 @@ bool SMDS_VolumeTool::setFace( int faceIndex ) const
   if ( !myVolume )
     return false;
 
-  if ( myCurFace == faceIndex )
+  if ( myCurFace.myIndex == faceIndex )
     return true;
 
-  myCurFace = -1;
+  myCurFace.myIndex = -1;
 
   if ( faceIndex < 0 || faceIndex >= NbFaces() )
     return false;
-
-  if (myFaceNodes != NULL) {
-    delete [] myFaceNodes;
-    myFaceNodes = NULL;
-  }
 
   if (myVolume->IsPoly())
   {
@@ -1644,21 +1938,31 @@ bool SMDS_VolumeTool::setFace( int faceIndex ) const
     }
 
     // set face nodes
-    int iNode;
-    myFaceNbNodes = myPolyedre->NbFaceNodes(faceIndex + 1);
-    myFaceNodes = new const SMDS_MeshNode* [myFaceNbNodes + 1];
-    for ( iNode = 0; iNode < myFaceNbNodes; iNode++ )
-      myFaceNodes[ iNode ] = myPolyedre->GetFaceNode(faceIndex + 1, iNode + 1);
-    myFaceNodes[ myFaceNbNodes ] = myFaceNodes[ 0 ]; // last = first
+    SMDS_VolumeTool* me = const_cast< SMDS_VolumeTool* >( this );
+    if ( !myAllFacesNbNodes ) {
+      me->myPolyQuantities = myPolyedre->GetQuantities();
+      myAllFacesNbNodes    = &myPolyQuantities[0];
+    }
+    myCurFace.myNbNodes = myAllFacesNbNodes[ faceIndex ];
+    myCurFace.myNodes.resize( myCurFace.myNbNodes + 1 );
+    me->myPolyIndices.resize( myCurFace.myNbNodes + 1 );
+    myCurFace.myNodeIndices = & me->myPolyIndices[0];
+    int shift = std::accumulate( myAllFacesNbNodes, myAllFacesNbNodes+faceIndex, 0 );
+    for ( int iNode = 0; iNode < myCurFace.myNbNodes; iNode++ )
+    {
+      myCurFace.myNodes      [ iNode ] = myVolumeNodes[ shift + iNode ];
+      myCurFace.myNodeIndices[ iNode ] = shift + iNode;
+    }
+    myCurFace.myNodes      [ myCurFace.myNbNodes ] = myCurFace.myNodes[ 0 ]; // last = first
+    myCurFace.myNodeIndices[ myCurFace.myNbNodes ] = myCurFace.myNodeIndices[ 0 ];
 
     // check orientation
     if (myExternalFaces)
     {
-      myCurFace = faceIndex; // avoid infinite recursion in IsFaceExternal()
+      myCurFace.myIndex = faceIndex; // avoid infinite recursion in IsFaceExternal()
       myExternalFaces = false; // force normal computation by IsFaceExternal()
       if ( !IsFaceExternal( faceIndex ))
-        for ( int i = 0, j = myFaceNbNodes; i < j; ++i, --j )
-          std::swap( myFaceNodes[i], myFaceNodes[j] );
+        std::reverse( myCurFace.myNodes.begin(), myCurFace.myNodes.end() );
       myExternalFaces = true;
     }
   }
@@ -1667,7 +1971,7 @@ bool SMDS_VolumeTool::setFace( int faceIndex ) const
     if ( !myAllFacesNodeIndices_F )
     {
       // choose data for an element type
-      switch ( myVolumeNbNodes ) {
+      switch ( myVolumeNodes.size() ) {
       case 4:
         myAllFacesNodeIndices_F  = &Tetra_F [0][0];
         //myAllFacesNodeIndices_FE = &Tetra_F [0][0];
@@ -1724,7 +2028,7 @@ bool SMDS_VolumeTool::setFace( int faceIndex ) const
         myAllFacesNodeIndices_RE = &QuadHexa_RE[0][0];
         myAllFacesNbNodes        = QuadHexa_nbN;
         myMaxFaceNbNodes         = sizeof(QuadHexa_F[0])/sizeof(QuadHexa_F[0][0]);
-        if ( !myIgnoreCentralNodes && myVolumeNbNodes == 27 )
+        if ( !myIgnoreCentralNodes && myVolumeNodes.size() == 27 )
         {
           myAllFacesNodeIndices_F  = &TriQuadHexa_F [0][0];
           //myAllFacesNodeIndices_FE = &TriQuadHexa_FE[0][0];
@@ -1744,21 +2048,21 @@ bool SMDS_VolumeTool::setFace( int faceIndex ) const
         return false;
       }
     }
-    myFaceNbNodes = myAllFacesNbNodes[ faceIndex ];
+    myCurFace.myNbNodes = myAllFacesNbNodes[ faceIndex ];
     // if ( myExternalFaces )
-    //   myFaceNodeIndices = (int*)( myVolForward ? myAllFacesNodeIndices_FE + faceIndex*myMaxFaceNbNodes : myAllFacesNodeIndices_RE + faceIndex*myMaxFaceNbNodes );
+    //   myCurFace.myNodeIndices = (int*)( myVolForward ? myAllFacesNodeIndices_FE + faceIndex*myMaxFaceNbNodes : myAllFacesNodeIndices_RE + faceIndex*myMaxFaceNbNodes );
     // else
-    //   myFaceNodeIndices = (int*)( myAllFacesNodeIndices_F + faceIndex*myMaxFaceNbNodes );
-    myFaceNodeIndices = (int*)( myVolForward ? myAllFacesNodeIndices_F + faceIndex*myMaxFaceNbNodes : myAllFacesNodeIndices_RE + faceIndex*myMaxFaceNbNodes );
+    //   myCurFace.myNodeIndices = (int*)( myAllFacesNodeIndices_F + faceIndex*myMaxFaceNbNodes );
+    myCurFace.myNodeIndices = (int*)( myVolForward ? myAllFacesNodeIndices_F + faceIndex*myMaxFaceNbNodes : myAllFacesNodeIndices_RE + faceIndex*myMaxFaceNbNodes );
 
     // set face nodes
-    myFaceNodes = new const SMDS_MeshNode* [myFaceNbNodes + 1];
-    for ( int iNode = 0; iNode < myFaceNbNodes; iNode++ )
-      myFaceNodes[ iNode ] = myVolumeNodes[ myFaceNodeIndices[ iNode ]];
-    myFaceNodes[ myFaceNbNodes ] = myFaceNodes[ 0 ];
+    myCurFace.myNodes.resize( myCurFace.myNbNodes + 1 );
+    for ( int iNode = 0; iNode < myCurFace.myNbNodes; iNode++ )
+      myCurFace.myNodes[ iNode ] = myVolumeNodes[ myCurFace.myNodeIndices[ iNode ]];
+    myCurFace.myNodes[ myCurFace.myNbNodes ] = myCurFace.myNodes[ 0 ];
   }
 
-  myCurFace = faceIndex;
+  myCurFace.myIndex = faceIndex;
 
   return true;
 }

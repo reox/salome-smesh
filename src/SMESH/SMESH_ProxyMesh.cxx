@@ -1,9 +1,9 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,6 +24,8 @@
 
 #include "SMDS_IteratorOnIterators.hxx"
 #include "SMDS_SetIterator.hxx"
+#include "SMESHDS_Mesh.hxx"
+#include "SMESH_Mesh.hxx"
 #include "SMESH_MesherHelper.hxx"
 
 #include <TopTools_ListIteratorOfListOfShape.hxx>
@@ -45,7 +47,7 @@ SMESH_ProxyMesh::SMESH_ProxyMesh():_mesh(0)
  */
 //================================================================================
 
-SMESH_ProxyMesh::SMESH_ProxyMesh(vector<SMESH_ProxyMesh::Ptr>& components):
+SMESH_ProxyMesh::SMESH_ProxyMesh(std::vector<SMESH_ProxyMesh::Ptr>& components):
   _mesh(0)
 {
   if ( components.empty() ) return;
@@ -68,8 +70,8 @@ SMESH_ProxyMesh::SMESH_ProxyMesh(vector<SMESH_ProxyMesh::Ptr>& components):
       if ( _subMeshes[j] )
       {
         // unite 2 sub-meshes
-        set< const SMDS_MeshElement * > elems( _subMeshes[j]->_elements.begin(),
-                                               _subMeshes[j]->_elements.end());
+        std::set< const SMDS_MeshElement * > elems( _subMeshes[j]->_elements.begin(),
+                                                    _subMeshes[j]->_elements.end());
         elems.insert( m->_subMeshes[j]->_elements.begin(),
                       m->_subMeshes[j]->_elements.end());
         _subMeshes[j]->_elements.assign( elems.begin(), elems.end() );
@@ -99,11 +101,11 @@ SMESH_ProxyMesh::SMESH_ProxyMesh(vector<SMESH_ProxyMesh::Ptr>& components):
 
 SMESH_ProxyMesh::~SMESH_ProxyMesh()
 {
-  for ( unsigned i = 0; i < _subMeshes.size(); ++i )
+  for ( size_t i = 0; i < _subMeshes.size(); ++i )
     delete _subMeshes[i];
   _subMeshes.clear();
 
-  set< const SMDS_MeshElement* >::iterator i = _elemsInMesh.begin();
+  std::set< const SMDS_MeshElement* >::iterator i = _elemsInMesh.begin();
   for ( ; i != _elemsInMesh.end(); ++i )
     GetMeshDS()->RemoveFreeElement( *i, 0 );
   _elemsInMesh.clear();
@@ -130,7 +132,7 @@ const SMESHDS_SubMesh* SMESH_ProxyMesh::GetSubMesh(const TopoDS_Shape& shape) co
 {
   const SMESHDS_SubMesh* sm = 0;
 
-  int i = shapeIndex(shape);
+  size_t i = shapeIndex(shape);
   if ( i < _subMeshes.size() )
     sm = _subMeshes[i];
   if ( !sm )
@@ -148,7 +150,7 @@ const SMESHDS_SubMesh* SMESH_ProxyMesh::GetSubMesh(const TopoDS_Shape& shape) co
 const SMESH_ProxyMesh::SubMesh*
 SMESH_ProxyMesh::GetProxySubMesh(const TopoDS_Shape& shape) const
 {
-  int i = shapeIndex(shape);
+  size_t i = shapeIndex(shape);
   return i < _subMeshes.size() ? _subMeshes[i] : 0;
 }
 
@@ -178,6 +180,21 @@ const SMDS_MeshNode* SMESH_ProxyMesh::GetProxyNode( const SMDS_MeshNode* node ) 
   return proxy;
 }
 
+//================================================================================
+/*!
+ * \brief Returns number of proxy sub-meshes
+ */
+//================================================================================
+
+int SMESH_ProxyMesh::NbProxySubMeshes() const
+{
+  int nb = 0;
+  for ( size_t i = 0; i < _subMeshes.size(); ++i )
+    nb += bool( _subMeshes[i] );
+
+  return nb;
+}
+
 namespace
 {
   //================================================================================
@@ -188,12 +205,12 @@ namespace
 
   class TFilteringIterator : public SMDS_ElemIterator
   {
-    SMDS_ElemIteratorPtr        _iter;
-    const SMDS_MeshElement *    _curElem;
-    vector< SMDSAbs_EntityType> _okTypes;
+    SMDS_ElemIteratorPtr             _iter;
+    const SMDS_MeshElement *         _curElem;
+    std::vector< SMDSAbs_EntityType> _okTypes;
   public:
-    TFilteringIterator( const vector< SMDSAbs_EntityType>& okTypes,
-                        const SMDS_ElemIteratorPtr&        elemIterator)
+    TFilteringIterator( const std::vector< SMDSAbs_EntityType>& okTypes,
+                        const SMDS_ElemIteratorPtr&             elemIterator)
       :_iter(elemIterator), _curElem(0), _okTypes(okTypes)
     {
       next();
@@ -267,11 +284,11 @@ SMDS_ElemIteratorPtr SMESH_ProxyMesh::GetFaces() const
   // ... else elements filtered using allowedTypes are additionally returned
   SMDS_ElemIteratorPtr facesIter = GetMeshDS()->elementsIterator(SMDSAbs_Face);
   SMDS_ElemIteratorPtr filterIter( new TFilteringIterator( _allowedTypes, facesIter ));
-  vector< SMDS_ElemIteratorPtr > iters(2);
+  std::vector< SMDS_ElemIteratorPtr > iters(2);
   iters[0] = proxyIter;
   iters[1] = filterIter;
     
-  typedef vector< SMDS_ElemIteratorPtr > TElemIterVector;
+  typedef std::vector< SMDS_ElemIteratorPtr >                                 TElemIterVector;
   typedef SMDS_IteratorOnIterators<const SMDS_MeshElement *, TElemIterVector> TItersIter;
   return SMDS_ElemIteratorPtr( new TItersIter( iters ));
 }
@@ -329,7 +346,7 @@ SMESH_ProxyMesh::SubMesh* SMESH_ProxyMesh::getProxySubMesh(int index)
   if ( int(_subMeshes.size()) <= index )
     _subMeshes.resize( index+1, 0 );
   if ( !_subMeshes[index] )
-    _subMeshes[index] = new SubMesh( index );
+    _subMeshes[index] = newSubmesh( index );
   return _subMeshes[index];
 }
 
@@ -408,24 +425,24 @@ void SMESH_ProxyMesh::takeTmpElemsInMesh( SMESH_ProxyMesh* proxyMesh )
 
 //================================================================================
 /*!
- * \brief Removes tmp faces from the _mesh
+ * \brief Removes tmp elements from the _mesh
  */
 //================================================================================
 
-void SMESH_ProxyMesh::removeTmpElement( const SMDS_MeshElement* face )
+void SMESH_ProxyMesh::removeTmpElement( const SMDS_MeshElement* elem )
 {
-  if ( face && face->GetID() > 0 )
+  if ( elem && elem->GetID() > 0 )
   {
-    set< const SMDS_MeshElement* >::iterator i =  _elemsInMesh.find( face );
+    std::set< const SMDS_MeshElement* >::iterator i = _elemsInMesh.find( elem );
     if ( i != _elemsInMesh.end() )
     {
-      GetMeshDS()->RemoveFreeElement( face, 0 );
+      GetMeshDS()->RemoveFreeElement( elem, 0 );
       _elemsInMesh.erase( i );
     }
   }
   else
   {
-    delete face;
+    delete elem;
   }
 }
 
@@ -435,9 +452,9 @@ void SMESH_ProxyMesh::removeTmpElement( const SMDS_MeshElement* face )
  */
 //================================================================================
 
-void SMESH_ProxyMesh::storeTmpElement( const SMDS_MeshElement* face )
+void SMESH_ProxyMesh::storeTmpElement( const SMDS_MeshElement* elem )
 {
-  _elemsInMesh.insert( face );
+  _elemsInMesh.insert( elem );
 }
 
 //================================================================================
@@ -453,7 +470,7 @@ void SMESH_ProxyMesh::setNode2Node(const SMDS_MeshNode* srcNode,
   SubMesh* sm = const_cast<SubMesh*>( subMesh );
   if ( !subMesh->_n2n )
     sm->_n2n = new TN2NMap;
-  sm->_n2n->insert( make_pair( srcNode, proxyNode ));
+  sm->_n2n->insert( std::make_pair( srcNode, proxyNode ));
 }
 
 //================================================================================
@@ -499,25 +516,60 @@ void SMESH_ProxyMesh::SubMesh::Clear()
 
 //================================================================================
 /*!
- * \brief Return number of elements in a proxy submesh
+ * \brief Return number of elements in a proxy sub-mesh. The method is meaningful
+ *        for a sub-mesh containing tmp faces.
  */
 //================================================================================
 
 int SMESH_ProxyMesh::SubMesh::NbElements() const
 {
-  return _elements.size();
+  return _uvPtStructVec.empty() ? _elements.size() : _uvPtStructVec.size() - 1;
 }
 
 //================================================================================
 /*!
- * \brief Return elements of a proxy submesh
+ * \brief Return elements of a proxy sub-mesh. The method is meaningful
+ *        for a sub-mesh containing tmp faces.
  */
 //================================================================================
 
-SMDS_ElemIteratorPtr SMESH_ProxyMesh::SubMesh::GetElements() const
+SMDS_ElemIteratorPtr SMESH_ProxyMesh::SubMesh::GetElements(bool reverse) const
 {
   return SMDS_ElemIteratorPtr
     ( new SMDS_ElementVectorIterator( _elements.begin(), _elements.end() ));
+}
+
+//================================================================================
+/*!
+ * \brief Return number of nodes in a proxy sub-mesh. The method is meaningful
+ *        for a sub-mesh containing nodes of 2D viscous layer.
+ */
+//================================================================================
+
+int SMESH_ProxyMesh::SubMesh::NbNodes() const
+{
+  return _uvPtStructVec.size();
+}
+
+//================================================================================
+/*!
+ * \brief Return nodes of a proxy sub-mesh. The method is meaningful
+ *        for a sub-mesh containing nodes of 2D viscous layer.
+ */
+//================================================================================
+
+SMDS_NodeIteratorPtr SMESH_ProxyMesh::SubMesh::GetNodes(bool reverse) const
+{
+  if ( !_uvPtStructVec.empty() )
+    return SMDS_NodeIteratorPtr ( new SMDS_SetIterator
+                                  < SMDS_pNode,
+                                  UVPtStructVec::const_iterator,
+                                  UVPtStruct::NodeAccessor >
+                                  ( _uvPtStructVec.begin(), _uvPtStructVec.end() ));
+
+  return SMDS_NodeIteratorPtr
+    ( new SMDS_SetIterator< SMDS_pNode, std::vector< SMDS_pElement >::const_iterator>
+      ( _elements.begin(), _elements.end() ));
 }
 
 //================================================================================

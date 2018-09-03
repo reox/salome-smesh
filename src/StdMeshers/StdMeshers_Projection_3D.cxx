@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -34,6 +34,7 @@
 #include "SMDS_PolyhedralVolumeOfNodes.hxx"
 #include "SMDS_VolumeTool.hxx"
 #include "SMESHDS_Hypothesis.hxx"
+#include "SMESHDS_Mesh.hxx"
 #include "SMESHDS_SubMesh.hxx"
 #include "SMESH_Block.hxx"
 #include "SMESH_Comment.hxx"
@@ -52,13 +53,12 @@
 
 #define RETURN_BAD_RESULT(msg) { MESSAGE(")-: Error: " << msg); return false; }
 #define gpXYZ(n) gp_XYZ(n->X(),n->Y(),n->Z())
-#define SHOWYXZ(msg, xyz) // {\
-// gp_Pnt p (xyz); \
-// cout << msg << " ("<< p.X() << "; " <<p.Y() << "; " <<p.Z() << ") " <<endl;\
-// }
+#define SHOWYXZ(msg, xyz)                                               \
+  //{gp_Pnt p(xyz); cout<<msg<< " ("<< p.X() << "; " <<p.Y() << "; " <<p.Z() << ") " <<endl; }
 
-typedef StdMeshers_ProjectionUtils TAssocTool;
+namespace TAssocTool = StdMeshers_ProjectionUtils;
 
+using namespace std;
 
 //=======================================================================
 //function : StdMeshers_Projection_3D
@@ -219,13 +219,13 @@ bool StdMeshers_Projection_3D::Compute(SMESH_Mesh& aMesh, const TopoDS_Shape& aS
                  SMESH_Comment("Target shape must have 1 shell but not ") << nbShell);
 
   // Check that shapes are blocks
-  if ( TAssocTool::Count( tgtShell, TopAbs_FACE , 1 ) != 6 ||
-       TAssocTool::Count( tgtShell, TopAbs_EDGE , 1 ) != 12 ||
-       TAssocTool::Count( tgtShell, TopAbs_WIRE , 1 ) != 6 )
+  if ( SMESH_MesherHelper::Count( tgtShell, TopAbs_FACE , 1 ) != 6 ||
+       SMESH_MesherHelper::Count( tgtShell, TopAbs_EDGE , 1 ) != 12 ||
+       SMESH_MesherHelper::Count( tgtShell, TopAbs_WIRE , 1 ) != 6 )
     return error(COMPERR_BAD_SHAPE, "Target shape is not a block");
-  if ( TAssocTool::Count( srcShell, TopAbs_FACE , 1 ) != 6 ||
-       TAssocTool::Count( srcShell, TopAbs_EDGE , 1 ) != 12 ||
-       TAssocTool::Count( srcShell, TopAbs_WIRE , 1 ) != 6 )
+  if ( SMESH_MesherHelper::Count( srcShell, TopAbs_FACE , 1 ) != 6 ||
+       SMESH_MesherHelper::Count( srcShell, TopAbs_EDGE , 1 ) != 12 ||
+       SMESH_MesherHelper::Count( srcShell, TopAbs_WIRE , 1 ) != 6 )
     return error(COMPERR_BAD_SHAPE, "Source shape is not a block");
 
   // Assure that mesh on a source shape is computed
@@ -233,13 +233,14 @@ bool StdMeshers_Projection_3D::Compute(SMESH_Mesh& aMesh, const TopoDS_Shape& aS
   SMESH_subMesh* srcSubMesh = srcMesh->GetSubMesh( _sourceHypo->GetSource3DShape() );
   //SMESH_subMesh* tgtSubMesh = tgtMesh->GetSubMesh( aShape );
 
-  if ( tgtMesh == srcMesh && !aShape.IsSame( _sourceHypo->GetSource3DShape() )) {
+  string srcMeshError;
+  if ( tgtMesh == srcMesh  && !aShape.IsSame( _sourceHypo->GetSource3DShape() )) {
     if ( !TAssocTool::MakeComputed( srcSubMesh ))
-      return error(COMPERR_BAD_INPUT_MESH,"Source mesh not computed");
+      srcMeshError = TAssocTool::SourceNotComputedError( srcSubMesh, this );
   }
   else {
     if ( !srcSubMesh->IsMeshComputed() )
-      return error(COMPERR_BAD_INPUT_MESH,"Source mesh not computed");
+      srcMeshError = TAssocTool::SourceNotComputedError();
   }
 
   // Find 2 pairs of corresponding vertices
@@ -294,19 +295,19 @@ bool StdMeshers_Projection_3D::Compute(SMESH_Mesh& aMesh, const TopoDS_Shape& aS
       shape2ShapeMap.Clear();
       vector< int > edgeIdVec;
       SMESH_Block::GetFaceEdgesIDs( fId, edgeIdVec );
-      for ( int i = 0; i < edgeIdVec.size(); ++i ) {
+      for ( size_t i = 0; i < edgeIdVec.size(); ++i ) {
         int eID = edgeIdVec[ i ];
-        shape2ShapeMap.Bind( tgtShapes( eID ), scrShapes( eID ));
+        shape2ShapeMap.Bind( scrShapes( eID ), tgtShapes( eID ));
         if ( i < 2 ) {
           vector< int > vertexIdVec;
           SMESH_Block::GetEdgeVertexIDs( eID, vertexIdVec );
-          shape2ShapeMap.Bind( tgtShapes( vertexIdVec[0] ), scrShapes( vertexIdVec[0] ));
-          shape2ShapeMap.Bind( tgtShapes( vertexIdVec[1] ), scrShapes( vertexIdVec[1] ));
+          shape2ShapeMap.Bind( scrShapes( vertexIdVec[0]), tgtShapes( vertexIdVec[0]) );
+          shape2ShapeMap.Bind( scrShapes( vertexIdVec[1]), tgtShapes( vertexIdVec[1]) );
         }
       }
     }
     // Find matching nodes of tgt and src faces
-    TNodeNodeMap faceMatchingNodes;
+    TAssocTool::TNodeNodeMap faceMatchingNodes;
     if ( ! TAssocTool::FindMatchingNodesOnFaces( srcFace, srcMesh, tgtFace, tgtMesh, 
                                                  shape2ShapeMap, faceMatchingNodes ))
       return error(COMPERR_BAD_INPUT_MESH,SMESH_Comment("Mesh on faces #")
@@ -459,13 +460,13 @@ bool StdMeshers_Projection_3D::Evaluate(SMESH_Mesh& aMesh,
                  SMESH_Comment("Target shape must have 1 shell but not ") << nbShell);
 
   // Check that shapes are blocks
-  if ( TAssocTool::Count( tgtShell, TopAbs_FACE , 1 ) != 6 ||
-       TAssocTool::Count( tgtShell, TopAbs_EDGE , 1 ) != 12 ||
-       TAssocTool::Count( tgtShell, TopAbs_WIRE , 1 ) != 6 )
+  if ( SMESH_MesherHelper::Count( tgtShell, TopAbs_FACE , 1 ) != 6 ||
+       SMESH_MesherHelper::Count( tgtShell, TopAbs_EDGE , 1 ) != 12 ||
+       SMESH_MesherHelper::Count( tgtShell, TopAbs_WIRE , 1 ) != 6 )
     return error(COMPERR_BAD_SHAPE, "Target shape is not a block");
-  if ( TAssocTool::Count( srcShell, TopAbs_FACE , 1 ) != 6 ||
-       TAssocTool::Count( srcShell, TopAbs_EDGE , 1 ) != 12 ||
-       TAssocTool::Count( srcShell, TopAbs_WIRE , 1 ) != 6 )
+  if ( SMESH_MesherHelper::Count( srcShell, TopAbs_FACE , 1 ) != 6 ||
+       SMESH_MesherHelper::Count( srcShell, TopAbs_EDGE , 1 ) != 12 ||
+       SMESH_MesherHelper::Count( srcShell, TopAbs_WIRE , 1 ) != 6 )
     return error(COMPERR_BAD_SHAPE, "Source shape is not a block");
 
   // Assure that mesh on a source shape is computed
@@ -540,3 +541,39 @@ void StdMeshers_Projection_3D::SetEventListener(SMESH_subMesh* subMesh)
                                 _sourceHypo->GetSourceMesh() );
 }
   
+//================================================================================
+/*!
+ * \brief Return true if the algorithm can mesh this shape
+ *  \param [in] aShape - shape to check
+ *  \param [in] toCheckAll - if true, this check returns OK if all shapes are OK,
+ *              else, returns OK if at least one shape is OK
+ */
+//================================================================================
+
+bool StdMeshers_Projection_3D::IsApplicable(const TopoDS_Shape & aShape, bool toCheckAll)
+{
+  TopExp_Explorer exp0( aShape, TopAbs_SOLID );
+  if ( !exp0.More() ) return false;
+
+  TopTools_IndexedMapOfOrientedShape blockShapes;
+  TopoDS_Vertex v;
+  TopoDS_Shell shell;
+  for ( ; exp0.More(); exp0.Next() )
+  {
+    int nbFoundShells = 0;
+    TopExp_Explorer exp1( exp0.Current(), TopAbs_SHELL );
+    for ( ; exp1.More(); exp1.Next(), ++nbFoundShells )
+    {
+      shell = TopoDS::Shell( exp1.Current() );
+      if ( nbFoundShells == 2 ) break;
+    }
+    if ( nbFoundShells != 1 ) {
+      if ( toCheckAll ) return false;
+      continue;
+    }   
+    bool isBlock = SMESH_Block::FindBlockShapes( shell, v, v, blockShapes );
+    if ( toCheckAll && !isBlock ) return false;
+    if ( !toCheckAll && isBlock ) return true;
+  }
+  return toCheckAll;
+}

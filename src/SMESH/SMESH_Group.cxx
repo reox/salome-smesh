@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,6 @@
 //  File   : SMESH_Group.cxx
 //  Author : Michael Sazonov (OCC)
 //  Module : SMESH
-//  $Header: /home/server/cvs/SMESH/SMESH_SRC/src/SMESH/SMESH_Group.cxx,v 1.8.20.5.8.1 2012-04-13 09:31:08 vsr Exp $
 //
 #include "SMESH_Group.hxx"
 #include "SMESH_Mesh.hxx"
@@ -60,6 +59,7 @@ SMESH_Group::SMESH_Group (int                       theID,
     myGroupDS = new SMESHDS_Group (theID,
                                    const_cast<SMESH_Mesh*>(theMesh)->GetMeshDS(),
                                    theType);
+  myGroupDS->SetStoreName( theName );
 }
 
 //================================================================================
@@ -76,11 +76,23 @@ SMESH_Group::SMESH_Group (SMESHDS_GroupBase* groupDS): myGroupDS( groupDS )
 
 //=============================================================================
 /*!
- *  
+ *  Destructor deletes myGroupDS
  */
 //=============================================================================
 
 SMESH_Group::~SMESH_Group ()
 {
   delete myGroupDS; myGroupDS=0;
+}
+
+//================================================================================
+/*!
+ * \brief Sets a new name
+ */
+//================================================================================
+
+void SMESH_Group::SetName (const char* theName)
+{
+  myName = theName;
+  myGroupDS->SetStoreName( theName );
 }

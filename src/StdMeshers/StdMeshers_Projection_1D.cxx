@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -57,7 +57,8 @@ using namespace std;
 
 #define RETURN_BAD_RESULT(msg) { MESSAGE(")-: Error: " << msg); return false; }
 
-typedef StdMeshers_ProjectionUtils TAssocTool;
+//typedef StdMeshers_ProjectionUtils TAssocTool;
+namespace TAssocTool = StdMeshers_ProjectionUtils;
 
 //=======================================================================
 //function : StdMeshers_Projection_1D
@@ -238,14 +239,18 @@ bool StdMeshers_Projection_1D::Compute(SMESH_Mesh& theMesh, const TopoDS_Shape& 
   SMESH_subMesh* srcSubMesh = srcMesh->GetSubMesh( srcEdge );
   //SMESH_subMesh* tgtSubMesh = tgtMesh->GetSubMesh( tgtEdge );
 
+  string srcMeshError;
   if ( tgtMesh == srcMesh ) {
     if ( !TAssocTool::MakeComputed( srcSubMesh ))
-      return error(COMPERR_BAD_INPUT_MESH,"Source mesh not computed");
+      srcMeshError = TAssocTool::SourceNotComputedError( srcSubMesh, this );
   }
   else {
     if ( !srcSubMesh->IsMeshComputed() )
-      return error(COMPERR_BAD_INPUT_MESH,"Source mesh not computed");
+      srcMeshError = TAssocTool::SourceNotComputedError();
   }
+  if ( !srcMeshError.empty() )
+    return error(COMPERR_BAD_INPUT_MESH, srcMeshError );
+
   // -----------------------------------------------
   // Find out nodes distribution on the source edge
   // -----------------------------------------------

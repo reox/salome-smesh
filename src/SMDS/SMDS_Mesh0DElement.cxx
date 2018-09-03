@@ -1,9 +1,9 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,7 +19,6 @@
 
 //  SMESH SMDS : implementaion of Salome mesh data structure
 //  File   : SMDS_Mesh0DElement.cxx
-//  Author : Jean-Michel BOULCOURT
 //  Module : SMESH
 //
 #ifdef _MSC_VER
@@ -29,6 +28,8 @@
 #include "SMDS_Mesh0DElement.hxx"
 #include "SMDS_IteratorOfElements.hxx"
 #include "SMDS_MeshNode.hxx"
+#include "SMDS_Mesh.hxx"
+
 #include "utilities.h"
 
 using namespace std;
@@ -39,7 +40,6 @@ using namespace std;
 //=======================================================================
 SMDS_Mesh0DElement::SMDS_Mesh0DElement (const SMDS_MeshNode * node)
 {
-  MESSAGE("SMDS_Mesh0DElement " << GetID());
   myNode = node;
 }
 
@@ -125,18 +125,6 @@ SMDS_ElemIteratorPtr SMDS_Mesh0DElement::elementsIterator (SMDSAbs_ElementType t
   }
 }
 
-//=======================================================================
-//function : operator<
-//purpose  :
-//=======================================================================
-bool operator< (const SMDS_Mesh0DElement & e1, const SMDS_Mesh0DElement & e2)
-{
-  int id1 = e1.myNode->getVtkId();
-  int id2 = e2.myNode->getVtkId();
-
-  return (id1 < id2);
-}
-
 /*!
  * \brief Return node by its index
  * \param ind - node index
@@ -153,8 +141,24 @@ const SMDS_MeshNode* SMDS_Mesh0DElement::GetNode(const int ind) const
 //function : ChangeNode
 //purpose  :
 //=======================================================================
-bool SMDS_Mesh0DElement::ChangeNode (const SMDS_MeshNode * node)
+bool SMDS_Mesh0DElement::ChangeNodes(const SMDS_MeshNode* nodes[], const int nbNodes)
 {
-  myNode = node;
-  return true;
+  if ( nbNodes == 1 )
+  {
+    vtkUnstructuredGrid* grid = SMDS_Mesh::_meshList[myMeshId]->getGrid();
+    vtkIdType npts = 0;
+    vtkIdType* pts = 0;
+    grid->GetCellPoints(myVtkID, npts, pts);
+    if (nbNodes != npts)
+    {
+      MESSAGE("ChangeNodes problem: not the same number of nodes " << npts << " -> " << nbNodes);
+      return false;
+    }
+    myNode = nodes[0];
+    pts[0] = myNode->getVtkId();
+
+    SMDS_Mesh::_meshList[myMeshId]->setMyModified();
+    return true;
+  }
+  return false;
 }

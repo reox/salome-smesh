@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -215,7 +215,7 @@ bool SMDS_QuadraticVolumeOfNodes::IsMediumNode(const SMDS_MeshNode* node) const
   case 15: nbCorners = 6; break;
   default: nbCorners = 8;
   }
-  for ( int i = nbCorners; i<myNodes.size(); i++) {
+  for ( size_t i = nbCorners; i<myNodes.size(); i++) {
     if(myNodes[i]==node) return true;
   }
   return false;
@@ -318,7 +318,7 @@ public:
 class _MySubIterator : public SMDS_ElemIterator
 {
   vector< const SMDS_MeshElement* > myElems;
-  int myIndex;
+  size_t                            myIndex;
 public:
   _MySubIterator(const SMDS_MeshVolume* vol, SMDSAbs_ElementType type):myIndex(0) {
     SMDS_VolumeTool vTool(vol);

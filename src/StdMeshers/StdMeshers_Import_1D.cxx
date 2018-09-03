@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -63,52 +63,10 @@ using namespace std;
 StdMeshers_Import_1D::StdMeshers_Import_1D(int hypId, int studyId, SMESH_Gen * gen)
   :SMESH_1D_Algo(hypId, studyId, gen), _sourceHyp(0)
 {
-  MESSAGE("StdMeshers_Import_1D::StdMeshers_Import_1D");
   _name = "Import_1D";
   _shapeType = (1 << TopAbs_EDGE);
 
   _compatibleHypothesis.push_back("ImportSource1D");
-}
-
-//=============================================================================
-/*!
- * Check presence of a hypothesis
- */
-//=============================================================================
-
-bool StdMeshers_Import_1D::CheckHypothesis
-                         (SMESH_Mesh&                          aMesh,
-                          const TopoDS_Shape&                  aShape,
-                          SMESH_Hypothesis::Hypothesis_Status& aStatus)
-{
-  _sourceHyp = 0;
-
-  const list <const SMESHDS_Hypothesis * >&hyps = GetUsedHypothesis(aMesh, aShape);
-  if ( hyps.size() == 0 )
-  {
-    aStatus = SMESH_Hypothesis::HYP_MISSING;
-    return false;  // can't work with no hypothesis
-  }
-
-  if ( hyps.size() > 1 )
-  {
-    aStatus = SMESH_Hypothesis::HYP_ALREADY_EXIST;
-    return false;
-  }
-
-  const SMESHDS_Hypothesis *theHyp = hyps.front();
-
-  string hypName = theHyp->GetName();
-
-  if (hypName == _compatibleHypothesis.front())
-  {
-    _sourceHyp = (StdMeshers_ImportSource1D *)theHyp;
-    aStatus = SMESH_Hypothesis::HYP_OK;
-    return true;
-  }
-
-  aStatus = SMESH_Hypothesis::HYP_INCOMPATIBLE;
-  return true;
 }
 
 //================================================================================
@@ -134,7 +92,7 @@ namespace // INTERNAL STUFF
     _ListenerData(const StdMeshers_ImportSource1D* h, _ListenerDataType type=SRC_HYP):
       SMESH_subMeshEventListenerData(/*isDeletable=*/true), _srcHyp(h)
     {
-      myType = type; 
+      myType = type;
     }
   };
   //================================================================================
@@ -182,10 +140,11 @@ namespace // INTERNAL STUFF
       if ( !_importMeshSubDS ) return;
       SMDS_ElemIteratorPtr eIt = _importMeshSubDS->GetElements();
       while ( eIt->more() )
-        meshDS->RemoveFreeElement( eIt->next(), _importMeshSubDS, /*fromGroups=*/false );
+        meshDS->RemoveFreeElement( eIt->next(), 0, /*fromGroups=*/false );
       SMDS_NodeIteratorPtr nIt = _importMeshSubDS->GetNodes();
       while ( nIt->more() )
-        meshDS->RemoveFreeNode( nIt->next(), _importMeshSubDS, /*fromGroups=*/false );
+        meshDS->RemoveFreeNode( nIt->next(), 0, /*fromGroups=*/false );
+      _importMeshSubDS->Clear();
       _n2n.clear();
       _e2e.clear();
     }
@@ -226,6 +185,8 @@ namespace // INTERNAL STUFF
         switch ( sm->GetSubShape().ShapeType() )
         {
         case TopAbs_EDGE:
+          if ( SMESH_Algo::isDegenerated( TopoDS::Edge( sm->GetSubShape() )))
+            continue;
         case TopAbs_FACE:
           _subM.insert( sm );
           if ( !sm->IsEmpty() )
@@ -266,6 +227,7 @@ namespace // INTERNAL STUFF
                               const SMESH_Hypothesis*         hyp);
     void removeSubmesh( SMESH_subMesh* sm, _ListenerData* data );
     void clearSubmesh ( SMESH_subMesh* sm, _ListenerData* data, bool clearAllSub );
+    void clearN2N     ( SMESH_Mesh* tgtMesh );
 
     // mark sm as missing src hyp with valid groups
     static void waitHypModification(SMESH_subMesh* sm)
@@ -327,7 +289,7 @@ namespace // INTERNAL STUFF
   //--------------------------------------------------------------------------------
   /*!
    * \brief Remove imported mesh and/or groups if needed
-   *  \param sm - submesh loosing Import algo
+   *  \param sm - submesh losing Import algo
    *  \param data - data holding imported groups
    */
   void _Listener::removeSubmesh( SMESH_subMesh* sm, _ListenerData* data )
@@ -342,9 +304,21 @@ namespace // INTERNAL STUFF
         bool rmGroups = (d->_copyGroupSubM.erase( sm ) && d->_copyGroupSubM.empty()) || rmMesh;
         if ( rmMesh )
           d->removeImportedMesh( sm->GetFather()->GetMeshDS() );
-        if ( rmGroups && data )
+        if ( rmGroups && data && data->myType == SRC_HYP )
           d->removeGroups( sm, data->_srcHyp );
       }
+  }
+  //--------------------------------------------------------------------------------
+  /*!
+   * \brief Clear _ImportData::_n2n.
+   *        _n2n is useful within one mesh.Compute() only
+   */
+  void _Listener::clearN2N( SMESH_Mesh* tgtMesh )
+  {
+    list< _ImportData >& dList = get()->_tgtMesh2ImportData[tgtMesh];
+    list< _ImportData >::iterator d = dList.begin();
+    for ( ; d != dList.end(); ++d )
+      d->_n2n.clear();
   }
   //--------------------------------------------------------------------------------
   /*!
@@ -367,7 +341,7 @@ namespace // INTERNAL STUFF
           // remove imported mesh and groups
           d->removeImportedMesh( sm->GetFather()->GetMeshDS() );
 
-          if ( data )
+          if ( data && data->myType == SRC_HYP )
             d->removeGroups( sm, data->_srcHyp );
 
           // clear the rest submeshes
@@ -379,7 +353,7 @@ namespace // INTERNAL STUFF
             {
               SMESH_subMesh* subM = *sub;
               _ListenerData* hypData = (_ListenerData*) subM->GetEventListenerData( get() );
-              if ( hypData )
+              if ( hypData && hypData->myType == SRC_HYP )
                 d->removeGroups( sm, hypData->_srcHyp );
 
               subM->ComputeStateEngine( SMESH_subMesh::CLEAN );
@@ -392,7 +366,7 @@ namespace // INTERNAL STUFF
         if ( sm->GetSubShape().ShapeType() == TopAbs_FACE )
           sm->ComputeSubMeshStateEngine( SMESH_subMesh::CLEAN );
       }
-      if ( data )
+      if ( data && data->myType == SRC_HYP )
         d->trackHypParams( sm, data->_srcHyp );
       d->_n2n.clear();
       d->_e2e.clear();
@@ -448,6 +422,8 @@ namespace // INTERNAL STUFF
         default:;
         }
       }
+      if ( !data->mySubMeshes.empty() )
+        clearN2N( data->mySubMeshes.front()->GetFather() );
     }
     else // event of Import submesh
     {
@@ -496,6 +472,10 @@ namespace // INTERNAL STUFF
                 d->_computedSubM.insert( *smIt);
           }
       }
+      // Clear _ImportData::_n2n if it's no more useful, i.e. when
+      // the event is not within mesh.Compute()
+      if ( SMESH_subMesh::ALGO_EVENT == eventType )
+        clearN2N( subMesh->GetFather() );
     }
   }
 
@@ -521,7 +501,7 @@ namespace // INTERNAL STUFF
     TopExp::MapShapes( SMESH_Mesh::PseudoShape(), pseudoSubShapes );
 
     // index of pseudoSubShapes corresponding to srcMeshDS
-    int subIndex = srcMeshDS->GetPersistentId() % pseudoSubShapes.Extent();
+    int    subIndex = 1 + srcMeshDS->GetPersistentId() % pseudoSubShapes.Extent();
     int nbSubShapes = 1 + srcMeshDS->GetPersistentId() / pseudoSubShapes.Extent();
 
     // try to find already present shapeForSrcMesh
@@ -547,7 +527,8 @@ namespace // INTERNAL STUFF
       aBuilder.MakeCompound( comp );
       shapeForSrcMesh = comp;
       for ( int iSub = 0; iSub < nbSubShapes; ++iSub )
-        aBuilder.Add( comp, pseudoSubShapes( subIndex+iSub ));
+        if ( subIndex+iSub <= pseudoSubShapes.Extent() )
+          aBuilder.Add( comp, pseudoSubShapes( subIndex+iSub ));
       TopExp_Explorer vExp( tgtMeshDS->ShapeToMesh(), TopAbs_VERTEX );
       aBuilder.Add( comp, vExp.Current() );
     }
@@ -610,10 +591,52 @@ namespace // INTERNAL STUFF
 
 } // namespace
 
+//=============================================================================
+/*!
+ * Check presence of a hypothesis
+ */
+//=============================================================================
+
+bool StdMeshers_Import_1D::CheckHypothesis
+                         (SMESH_Mesh&                          aMesh,
+                          const TopoDS_Shape&                  aShape,
+                          SMESH_Hypothesis::Hypothesis_Status& aStatus)
+{
+  _sourceHyp = 0;
+
+  const list <const SMESHDS_Hypothesis * >&hyps = GetUsedHypothesis(aMesh, aShape);
+  if ( hyps.size() == 0 )
+  {
+    aStatus = SMESH_Hypothesis::HYP_MISSING;
+    return false;  // can't work with no hypothesis
+  }
+
+  if ( hyps.size() > 1 )
+  {
+    aStatus = SMESH_Hypothesis::HYP_ALREADY_EXIST;
+    return false;
+  }
+
+  const SMESHDS_Hypothesis *theHyp = hyps.front();
+
+  string hypName = theHyp->GetName();
+
+  if (hypName == _compatibleHypothesis.front())
+  {
+    _sourceHyp = (StdMeshers_ImportSource1D *)theHyp;
+    aStatus = _sourceHyp->GetGroups().empty() ? HYP_BAD_PARAMETER : HYP_OK;
+    if ( aStatus == HYP_BAD_PARAMETER )
+      _Listener::waitHypModification( aMesh.GetSubMesh( aShape ));
+    return aStatus == HYP_OK;
+  }
+
+  aStatus = SMESH_Hypothesis::HYP_INCOMPATIBLE;
+  return false;
+}
 
 //=============================================================================
 /*!
- * Import elements from the other mesh 
+ * Import elements from the other mesh
  */
 //=============================================================================
 
@@ -621,7 +644,8 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
 {
   if ( !_sourceHyp ) return false;
 
-  const vector<SMESH_Group*>& srcGroups = _sourceHyp->GetGroups();
+  //MESSAGE("---------> StdMeshers_Import_1D::Compute");
+  const vector<SMESH_Group*>& srcGroups = _sourceHyp->GetGroups(/*loaded=*/true);
   if ( srcGroups.empty() )
     return error("Invalid source groups");
 
@@ -637,8 +661,8 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
   subShapeIDs.insert( shapeID );
 
   // get nodes on vertices
-  list < SMESH_TNodeXYZ > vertexNodes; 
- list < SMESH_TNodeXYZ >::iterator vNIt;
+  list < SMESH_TNodeXYZ > vertexNodes;
+  list < SMESH_TNodeXYZ >::iterator vNIt;
   TopExp_Explorer vExp( theShape, TopAbs_VERTEX );
   for ( ; vExp.More(); vExp.Next() )
   {
@@ -650,15 +674,17 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
     {
       _gen->Compute(theMesh,v,/*anUpward=*/true);
       n = SMESH_Algo::VertexNode( v, tgtMesh );
+      //MESSAGE("_gen->Compute " << n);
       if ( !n ) return false; // very strange
     }
     vertexNodes.push_back( SMESH_TNodeXYZ( n ));
+    //MESSAGE("SMESH_Algo::VertexNode " << n->GetID() << " " << n->X() << " " << n->Y() << " " << n->Z() );
   }
 
   // import edges from groups
   TNodeNodeMap* n2n;
   TElemElemMap* e2e;
-  for ( int iG = 0; iG < srcGroups.size(); ++iG )
+  for ( size_t iG = 0; iG < srcGroups.size(); ++iG )
   {
     const SMESHDS_GroupBase* srcGroup = srcGroups[iG]->GetGroupDS();
 
@@ -670,15 +696,21 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
     SMDS_ElemIteratorPtr srcElems = srcGroup->GetElements();
     vector<const SMDS_MeshNode*> newNodes;
     SMDS_MeshNode *tmpNode = helper.AddNode(0,0,0);
-    double u;
+    double u = 0.314159; // "random" value between 0 and 1, avoid 0 and 1, false detection possible on edge restrictions
     while ( srcElems->more() ) // loop on group contents
     {
       const SMDS_MeshElement* edge = srcElems->next();
       // find or create nodes of a new edge
       newNodes.resize( edge->NbNodes() );
+      //MESSAGE("edge->NbNodes " << edge->NbNodes());
       newNodes.back() = 0;
       SMDS_MeshElement::iterator node = edge->begin_nodes();
-      for ( unsigned i = 0; i < newNodes.size(); ++i, ++node )
+      SMESH_TNodeXYZ a(edge->GetNode(0));
+      // --- define a tolerance relative to the length of an edge
+      double mytol = a.Distance(edge->GetNode(edge->NbNodes()-1))/25;
+      //mytol = max(1.E-5, 10*edgeTol); // too strict and not necessary
+      //MESSAGE("mytol = " << mytol);
+      for ( size_t i = 0; i < newNodes.size(); ++i, ++node )
       {
         TNodeNodeMap::iterator n2nIt = n2n->insert( make_pair( *node, (SMDS_MeshNode*)0 )).first;
         if ( n2nIt->second )
@@ -689,30 +721,40 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
         else
         {
           // find an existing vertex node
+          double checktol = max(1.E-10, 10*edgeTol*edgeTol);
           for ( vNIt = vertexNodes.begin(); vNIt != vertexNodes.end(); ++vNIt)
-            if ( vNIt->SquareDistance( *node ) < 10 * edgeTol * edgeTol)
+            if ( vNIt->SquareDistance( *node ) < checktol)
             {
+              //MESSAGE("SquareDistance " << vNIt->SquareDistance( *node ) << " checktol " << checktol <<" "<<vNIt->X()<<" "<<vNIt->Y()<<" "<<vNIt->Z());
               (*n2nIt).second = vNIt->_node;
               vertexNodes.erase( vNIt );
               break;
             }
+            else if ( vNIt->SquareDistance( *node ) < 10*checktol)
+              MESSAGE("SquareDistance missed" << vNIt->SquareDistance( *node ) << " checktol " << checktol <<" "<<vNIt->X()<<" "<<vNIt->Y()<<" "<<vNIt->Z());
         }
         if ( !n2nIt->second )
         {
           // find out if node lies on theShape
+          //double dxyz[4];
           tmpNode->setXYZ( (*node)->X(), (*node)->Y(), (*node)->Z());
-          if ( helper.CheckNodeU( geomEdge, tmpNode, u, 10 * edgeTol, /*force=*/true ))
+          if ( helper.CheckNodeU( geomEdge, tmpNode, u, mytol, /*force=*/true)) // , dxyz )) // dxyz used for debug purposes
           {
             SMDS_MeshNode* newNode = tgtMesh->AddNode( (*node)->X(), (*node)->Y(), (*node)->Z());
             n2nIt->second = newNode;
             tgtMesh->SetNodeOnEdge( newNode, shapeID, u );
+            //MESSAGE("u=" << u << " " << newNode->X()<< " " << newNode->Y()<< " " << newNode->Z());
+            //MESSAGE("d=" << dxyz[0] << " " << dxyz[1] << " " << dxyz[2] << " " << dxyz[3]);
           }
         }
         if ( !(newNodes[i] = n2nIt->second ))
           break;
       }
       if ( !newNodes.back() )
+      {
+        //MESSAGE("not all nodes of edge lie on theShape");
         continue; // not all nodes of edge lie on theShape
+      }
 
       // make a new edge
       SMDS_MeshElement * newEdge;
@@ -720,6 +762,7 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
         newEdge = tgtMesh->AddEdge( newNodes[0], newNodes[1], newNodes[2] );
       else
         newEdge = tgtMesh->AddEdge( newNodes[0], newNodes[1]);
+      //MESSAGE("add Edge " << newNodes[0]->GetID() << " " << newNodes[1]->GetID());
       tgtMesh->SetMeshElementOnShape( newEdge, shapeID );
       e2e->insert( make_pair( edge, newEdge ));
     }
@@ -766,7 +809,7 @@ bool StdMeshers_Import_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & th
 
   // copy meshes
   vector<SMESH_Mesh*> srcMeshes = _sourceHyp->GetSourceMeshes();
-  for ( unsigned i = 0; i < srcMeshes.size(); ++i )
+  for ( size_t i = 0; i < srcMeshes.size(); ++i )
     importMesh( srcMeshes[i], theMesh, _sourceHyp, theShape );
 
   return true;
@@ -797,6 +840,7 @@ void StdMeshers_Import_1D::importMesh(const SMESH_Mesh*          srcMesh,
 
   // 1. Copy mesh
 
+  SMESH_MeshEditor::ElemFeatures elemType;
   vector<const SMDS_MeshNode*> newNodes;
   const SMESHDS_Mesh* srcMeshDS = srcMesh->GetMeshDS();
   SMDS_ElemIteratorPtr eIt = srcMeshDS->elementsIterator();
@@ -821,14 +865,14 @@ void StdMeshers_Import_1D::importMesh(const SMESH_Mesh*          srcMesh,
       tgtMeshDS->FindElement( newNodes, elem->GetType(), /*noMedium=*/false );
     if ( !newElem )
     {
-      newElem = additor.AddElement( newNodes, elem->GetType(), elem->IsPoly());
+      newElem = additor.AddElement( newNodes, elemType.Init( elem, /*basicOnly=*/false ));
       tgtSubMesh->AddElement( newElem );
     }
     if ( toCopyGroups )
       (*e2eIt).second = newElem;
   }
   // copy free nodes
-  if ( srcMeshDS->NbNodes() > n2n->size() )
+  if ( srcMeshDS->NbNodes() > (int) n2n->size() )
   {
     SMDS_NodeIteratorPtr nIt = srcMeshDS->nodesIterator();
     while( nIt->more() )
@@ -906,7 +950,7 @@ void StdMeshers_Import_1D::importMesh(const SMESH_Mesh*          srcMesh,
  */
 //=============================================================================
 
-void StdMeshers_Import_1D::setEventListener(SMESH_subMesh*             subMesh, 
+void StdMeshers_Import_1D::setEventListener(SMESH_subMesh*             subMesh,
                                             StdMeshers_ImportSource1D* sourceHyp)
 {
   if ( sourceHyp )
@@ -983,7 +1027,7 @@ bool StdMeshers_Import_1D::Evaluate(SMESH_Mesh &         theMesh,
 
     // count edges imported from groups
     int nbEdges = 0, nbQuadEdges = 0;
-    for ( int iG = 0; iG < srcGroups.size(); ++iG )
+    for ( size_t iG = 0; iG < srcGroups.size(); ++iG )
     {
       const SMESHDS_GroupBase* srcGroup = srcGroups[iG]->GetGroupDS();
       SMDS_ElemIteratorPtr srcElems = srcGroup->GetElements();
@@ -1012,7 +1056,7 @@ bool StdMeshers_Import_1D::Evaluate(SMESH_Mesh &         theMesh,
   }
 
   SMESH_subMesh * sm = theMesh.GetSubMesh(theShape);
-  aResMap.insert(make_pair(sm,aVec));
+  aResMap.insert( make_pair( sm, aVec ));
 
   return true;
 }
@@ -1033,7 +1077,7 @@ void StdMeshers_Import_1D::getMaps(const SMESH_Mesh* srcMesh,
   e2e = &iData->_e2e;
   if ( iData->_copyMeshSubM.empty() )
   {
-    n2n->clear();
+    // n2n->clear(); -- for sharing nodes on EDGEs
     e2e->clear();
   }
 }

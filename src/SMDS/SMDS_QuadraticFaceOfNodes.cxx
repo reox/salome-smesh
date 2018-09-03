@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -168,14 +168,14 @@ namespace {
 
   //=======================================================================
   //class : _MyInterlacedNodeIterator
-  //purpose  : 
+  //purpose  :
   //=======================================================================
 
   class _MyInterlacedNodeIterator:public SMDS_NodeIterator
   {
     const vector<const SMDS_MeshNode *>& mySet;
-    int myIndex;
-    const int * myInterlace;
+    size_t                               myIndex;
+    const int *                          myInterlace;
   public:
     _MyInterlacedNodeIterator(const vector<const SMDS_MeshNode *>& s,
                               const int * interlace):
@@ -190,21 +190,6 @@ namespace {
     {
       return mySet[ myInterlace[ myIndex++ ]];
     }
-  };
-
-  //=======================================================================
-  //class : _MyInterlacedNodeElemIterator
-  //purpose  : 
-  //=======================================================================
-
-  class _MyInterlacedNodeElemIterator : public SMDS_ElemIterator
-  {
-    SMDS_NodeIteratorPtr myItr;
-  public:
-    _MyInterlacedNodeElemIterator(SMDS_NodeIteratorPtr interlacedNodeItr):
-      myItr( interlacedNodeItr ) {}
-    bool more()                    { return myItr->more(); }
-    const SMDS_MeshElement* next() { return myItr->next(); }
   };
 
   //=======================================================================
@@ -234,16 +219,6 @@ SMDS_NodeIteratorPtr SMDS_QuadraticFaceOfNodes::interlacedNodesIterator() const
     (new _MyInterlacedNodeIterator (myNodes, myNodes.size()==6 ? triaInterlace : quadInterlace));
 }
 
-//=======================================================================
-//function : interlacedNodesElemIterator
-//purpose  : 
-//=======================================================================
-
-SMDS_ElemIteratorPtr SMDS_QuadraticFaceOfNodes::interlacedNodesElemIterator() const
-{
-  return SMDS_ElemIteratorPtr
-    (new _MyInterlacedNodeElemIterator ( interlacedNodesIterator() ));
-}
 /// ===================================================================
 /*!
  * \brief Iterator on edges of face
@@ -253,14 +228,14 @@ SMDS_ElemIteratorPtr SMDS_QuadraticFaceOfNodes::interlacedNodesElemIterator() co
 class _MyEdgeIterator : public SMDS_ElemIterator
 {
   vector< const SMDS_MeshElement* > myElems;
-  int myIndex;
+  size_t                            myIndex;
 public:
   _MyEdgeIterator(const SMDS_QuadraticFaceOfNodes* face):myIndex(0) {
     myElems.reserve( face->NbNodes() );
-    SMDS_ElemIteratorPtr nIt = face->interlacedNodesElemIterator();
+    SMDS_NodeIteratorPtr nIt = face->interlacedNodesIterator();
     const SMDS_MeshNode* n0 = face->GetNodeWrap( -1 );
     while ( nIt->more() ) {
-      const SMDS_MeshNode* n1 = static_cast<const SMDS_MeshNode*>( nIt->next() );
+      const SMDS_MeshNode* n1 = nIt->next();
       const SMDS_MeshElement* edge = SMDS_Mesh::FindEdge( n0, n1 );
       if ( edge )
         myElems.push_back( edge );

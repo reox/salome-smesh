@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -73,7 +73,6 @@ static bool EvaluatePentahedralMesh(SMESH_Mesh &, const TopoDS_Shape &,
 StdMeshers_Hexa_3D::StdMeshers_Hexa_3D(int hypId, int studyId, SMESH_Gen * gen)
   :SMESH_3D_Algo(hypId, studyId, gen)
 {
-  MESSAGE("StdMeshers_Hexa_3D::StdMeshers_Hexa_3D");
   _name = "Hexa_3D";
   _shapeType = (1 << TopAbs_SHELL) | (1 << TopAbs_SOLID);       // 1 bit /shape type
   _requireShape = false;
@@ -88,7 +87,6 @@ StdMeshers_Hexa_3D::StdMeshers_Hexa_3D(int hypId, int studyId, SMESH_Gen * gen)
 
 StdMeshers_Hexa_3D::~StdMeshers_Hexa_3D()
 {
-  MESSAGE("StdMeshers_Hexa_3D::~StdMeshers_Hexa_3D");
 }
 
 //=============================================================================
@@ -124,23 +122,17 @@ bool StdMeshers_Hexa_3D::CheckHypothesis
     return true;
   }
 
+  // only StdMeshers_ViscousLayers can be used
   aStatus = HYP_OK;
   for ( ; h != hyps.end(); ++h )
   {
-    string hypName = (*h)->GetName();
-    if ( find( _compatibleHypothesis.begin(),_compatibleHypothesis.end(),hypName )
-         != _compatibleHypothesis.end() )
-    {
-      _viscousLayersHyp = dynamic_cast< const StdMeshers_ViscousLayers*> ( *h );
-    }
-    else
-    {
-      aStatus = HYP_INCOMPATIBLE;
-    }
+    if ( !(_viscousLayersHyp = dynamic_cast< const StdMeshers_ViscousLayers*> ( *h )))
+      break;
   }
-
   if ( !_viscousLayersHyp )
     aStatus = HYP_INCOMPATIBLE;
+  else
+    error( _viscousLayersHyp->CheckHypothesis( aMesh, aShape, aStatus ));
 
   return aStatus == HYP_OK;
 }
@@ -150,12 +142,15 @@ namespace
   //=============================================================================
 
   typedef boost::shared_ptr< FaceQuadStruct > FaceQuadStructPtr;
+  typedef std::vector<gp_XYZ>                 TXYZColumn;
 
   // symbolic names of box sides
   enum EBoxSides{ B_BOTTOM=0, B_RIGHT, B_TOP, B_LEFT, B_FRONT, B_BACK, B_NB_SIDES };
 
   // symbolic names of sides of quadrangle
   enum EQuadSides{ Q_BOTTOM=0, Q_RIGHT, Q_TOP, Q_LEFT, Q_NB_SIDES };
+
+  enum EAxes{ COO_X=1, COO_Y, COO_Z };
 
   //=============================================================================
   /*!
@@ -172,6 +167,9 @@ namespace
     // node column's taken form _u2nodesMap taking into account sub-shape orientation
     vector<TNodeColumn> _columns;
 
+    // columns of normalized parameters of nodes within the unitary cube
+    vector<TXYZColumn> _ijkColumns;
+
     // geometry of a cube side
     TopoDS_Face _sideF;
 
@@ -182,6 +180,10 @@ namespace
     gp_XYZ GetXYZ(int iCol, int iRow) const
     {
       return SMESH_TNodeXYZ( GetNode( iCol, iRow ));
+    }
+    gp_XYZ& GetIJK(int iCol, int iRow)
+    {
+      return _ijkColumns[iCol][iRow];
     }
   };
 
@@ -222,8 +224,8 @@ namespace
    * \brief Finds FaceQuadStruct having a side equal to a given one and rearranges
    *  the found FaceQuadStruct::side to have the given side at a Q_BOTTOM place
    */
-  FaceQuadStructPtr getQuadWithBottom( StdMeshers_FaceSide* side,
-                                       FaceQuadStructPtr    quad[ 6 ])
+  FaceQuadStructPtr getQuadWithBottom( StdMeshers_FaceSidePtr side,
+                                       FaceQuadStructPtr      quad[ 6 ])
   {
     FaceQuadStructPtr foundQuad;
     for ( int i = 1; i < 6; ++i )
@@ -231,7 +233,7 @@ namespace
       if ( !quad[i] ) continue;
       for ( unsigned iS = 0; iS < quad[i]->side.size(); ++iS )
       {
-        const StdMeshers_FaceSide* side2 = quad[i]->side[iS];
+        const StdMeshers_FaceSidePtr side2 = quad[i]->side[iS];
         if (( side->FirstVertex().IsSame( side2->FirstVertex() ) ||
               side->FirstVertex().IsSame( side2->LastVertex() ))
             &&
@@ -241,7 +243,7 @@ namespace
         {
           if ( iS != Q_BOTTOM )
           {
-            vector< StdMeshers_FaceSide*> newSides;
+            vector< FaceQuadStruct::Side > newSides;
             for ( unsigned j = iS; j < quad[i]->side.size(); ++j )
               newSides.push_back( quad[i]->side[j] );
             for ( unsigned j = 0; j < iS; ++j )
@@ -282,24 +284,73 @@ namespace
     }
     return ( n == n00 || n == n01 || n == n10 || n == n11 );
   }
+
+  //================================================================================
+  /*!
+   * \brief Fill in _FaceGrid::_ijkColumns
+   *  \param [in,out] fg - a _FaceGrid
+   *  \param [in] i1 - coordinate index along _columns
+   *  \param [in] i2 - coordinate index along _columns[i]
+   *  \param [in] v3 - value of the constant parameter
+   */
+  //================================================================================
+
+  void computeIJK( _FaceGrid& fg, int i1, int i2, double v3 )
+  {
+    gp_XYZ ijk( v3, v3, v3 );
+    const size_t nbCol = fg._columns.size();
+    const size_t nbRow = fg._columns[0].size();
+
+    fg._ijkColumns.resize( nbCol );
+    for ( size_t i = 0; i < nbCol; ++i )
+      fg._ijkColumns[ i ].resize( nbRow, ijk );
+
+    vector< double > len( nbRow );
+    len[0] = 0;
+    for ( size_t i = 0; i < nbCol; ++i )
+    {
+      gp_Pnt pPrev = fg.GetXYZ( i, 0 );
+      for ( size_t j = 1; j < nbRow; ++j )
+      {
+        gp_Pnt p = fg.GetXYZ( i, j );
+        len[ j ] = len[ j-1 ] + p.Distance( pPrev );
+        pPrev = p;
+      }
+      for ( size_t j = 0; j < nbRow; ++j )
+        fg.GetIJK( i, j ).SetCoord( i2, len[ j ]/len.back() );
+    }
+
+    len.resize( nbCol );
+    for ( size_t j = 0; j < nbRow; ++j )
+    {
+      gp_Pnt pPrev = fg.GetXYZ( 0, j );
+      for ( size_t i = 1; i < nbCol; ++i )
+      {
+        gp_Pnt p = fg.GetXYZ( i, j );
+        len[ i ] = len[ i-1 ] + p.Distance( pPrev );
+        pPrev = p;
+      }
+      for ( size_t i = 0; i < nbCol; ++i )
+        fg.GetIJK( i, j ).SetCoord( i1, len[ i ]/len.back() );
+    }
+  }
 }
 
 //=============================================================================
 /*!
  * Generates hexahedron mesh on hexaedron like form using algorithm from
- * "Application de l'interpolation transfinie à la création de maillages
+ * "Application de l'interpolation transfinie ï¿½ la crï¿½ation de maillages
  *  C0 ou G1 continus sur des triangles, quadrangles, tetraedres, pentaedres
- *  et hexaedres déformés."
+ *  et hexaedres dï¿½formï¿½s."
  * Alain PERONNET - 8 janvier 1999
  */
 //=============================================================================
 
 bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
-                                 const TopoDS_Shape & aShape)// throw(SALOME_Exception)
+                                 const TopoDS_Shape & aShape)
 {
   // PAL14921. Enable catching std::bad_alloc and Standard_OutOfMemory outside
   //Unexpect aCatch(SalomeException);
-  MESSAGE("StdMeshers_Hexa_3D::Compute");
   SMESHDS_Mesh * meshDS = aMesh.GetMeshDS();
 
   // Shape verification
@@ -329,7 +380,8 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
   StdMeshers_Quadrangle_2D quadAlgo( _gen->GetANewId(), GetStudyId(), _gen);
   for ( int i = 0; i < 6; ++i )
   {
-    if ( !( quad[i] = FaceQuadStructPtr( quadAlgo.CheckNbEdges( aMesh, FF( i+1 )))))
+    if ( !( quad[i] = FaceQuadStructPtr( quadAlgo.CheckNbEdges( aMesh, FF( i+1 ),
+                                                                /*considerMesh=*/true))))
       return error( quadAlgo.GetComputeError() );
     if ( quad[i]->side.size() != 4 )
       return error( COMPERR_BAD_SHAPE, "Not a quadrangular box side" );
@@ -371,20 +423,13 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
     for ( int i = 0; i < 6; ++i )
     {
       const TopoDS_Face& sideF = aCubeSide[i]._quad->face;
-      if ( SMESHDS_SubMesh* smDS = meshDS->MeshElements( sideF ))
+      const SMESHDS_SubMesh* smDS =
+        proxymesh ? proxymesh->GetSubMesh( sideF ) : meshDS->MeshElements( sideF );
+      if ( !SMESH_MesherHelper::IsSameElemGeometry( smDS, SMDSGeom_QUADRANGLE,
+                                                    /*nullSubMeshRes=*/false ))
       {
-        bool isAllQuad = true;
-        SMDS_ElemIteratorPtr fIt = smDS->GetElements();
-        while ( fIt->more() && isAllQuad )
-        {
-          const SMDS_MeshElement* f = fIt->next();
-          isAllQuad = ( f->NbCornerNodes() == 4 );
-        }
-        if ( !isAllQuad )
-        {
-          SMESH_ComputeErrorPtr err = ComputePentahedralMesh(aMesh, aShape, proxymesh.get());
-          return error( err );
-        }
+        SMESH_ComputeErrorPtr err = ComputePentahedralMesh(aMesh, aShape, proxymesh.get());
+        return error( err );
       }
     }
   }
@@ -399,11 +444,12 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
   for ( int i = 0; i < 6; ++i )
   {
     const TopoDS_Face& F = aCubeSide[i]._quad->face;
-    StdMeshers_FaceSide* baseQuadSide = aCubeSide[i]._quad->side[ Q_BOTTOM ];
+    StdMeshers_FaceSidePtr baseQuadSide = aCubeSide[i]._quad->side[ Q_BOTTOM ];
     list<TopoDS_Edge> baseEdges( baseQuadSide->Edges().begin(), baseQuadSide->Edges().end() );
 
     // assure correctness of node positions on baseE:
     // helper.GetNodeU() will fix positions if they are wrong
+    helper.ToFixNodeParameters( true );
     for ( int iE = 0; iE < baseQuadSide->NbEdges(); ++iE )
     {
       const TopoDS_Edge& baseE = baseQuadSide->Edge( iE );
@@ -456,15 +502,15 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
   {
     aCubeSide[i]._columns.resize( aCubeSide[i]._u2nodesMap.size() );
 
-    int iFwd = 0, iRev = aCubeSide[i]._columns.size()-1;
-    int* pi = isReverse[i] ? &iRev : &iFwd;
+    size_t iFwd = 0, iRev = aCubeSide[i]._columns.size()-1;
+    size_t*  pi = isReverse[i] ? &iRev : &iFwd;
     TParam2ColumnMap::iterator u2nn = aCubeSide[i]._u2nodesMap.begin();
     for ( ; iFwd < aCubeSide[i]._columns.size(); --iRev, ++iFwd, ++u2nn )
       aCubeSide[i]._columns[ *pi ].swap( u2nn->second );
 
     aCubeSide[i]._u2nodesMap.clear();
   }
-  
+
   if ( proxymesh )
     for ( int i = 0; i < 6; ++i )
       for ( unsigned j = 0; j < aCubeSide[i]._columns.size(); ++j)
@@ -487,6 +533,14 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
   _FaceGrid* fLeft   = & aCubeSide[ B_LEFT   ];
   _FaceGrid* fFront  = & aCubeSide[ B_FRONT  ];
   _FaceGrid* fBack   = & aCubeSide[ B_BACK   ];
+
+  // compute normalized parameters of nodes on sides (PAL23189)
+  computeIJK( *fBottom, COO_X, COO_Y, /*z=*/0. );
+  computeIJK( *fRight,  COO_Y, COO_Z, /*x=*/1. );
+  computeIJK( *fTop,    COO_X, COO_Y, /*z=*/1. );
+  computeIJK( *fLeft,   COO_Y, COO_Z, /*x=*/0. );
+  computeIJK( *fFront,  COO_X, COO_Z, /*y=*/0. );
+  computeIJK( *fBack,   COO_X, COO_Z, /*y=*/1. );
 
   // cube size measured in nb of nodes
   int x, xSize = fBottom->_columns.size() , X = xSize - 1;
@@ -543,13 +597,14 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
   pointsOnShapes[ SMESH_Block::ID_V011 ] = fTop->GetXYZ( 0, Y );
   pointsOnShapes[ SMESH_Block::ID_V111 ] = fTop->GetXYZ( X, Y );
 
+  gp_XYZ params; // normalized parameters of an internal node within the unit box
   for ( x = 1; x < xSize-1; ++x )
   {
-    gp_XYZ params; // normalized parameters of internal node within a unit box
-    params.SetCoord( 1, x / double(X) );
+    const double rX = x / double(X);
     for ( y = 1; y < ySize-1; ++y )
     {
-      params.SetCoord( 2, y / double(Y) );
+      const double rY = y / double(Y);
+
       // a column to fill in during z loop
       vector< const SMDS_MeshNode* >& column = columns[ colIndex( x, y )];
       // projection points on horizontal edges
@@ -566,23 +621,36 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh &         aMesh,
       pointsOnShapes[ SMESH_Block::ID_Fxy1 ] = fTop   ->GetXYZ( x, y );
       for ( z = 1; z < zSize-1; ++z ) // z loop
       {
-        params.SetCoord( 3, z / double(Z) );
+        const double rZ = z / double(Z);
+
+        const gp_XYZ& pBo = fBottom->GetIJK( x, y );
+        const gp_XYZ& pTo = fTop   ->GetIJK( x, y );
+        const gp_XYZ& pFr = fFront ->GetIJK( x, z );
+        const gp_XYZ& pBa = fBack  ->GetIJK( x, z );
+        const gp_XYZ& pLe = fLeft  ->GetIJK( y, z );
+        const gp_XYZ& pRi = fRight ->GetIJK( y, z );
+        params.SetCoord( 1, 0.5 * ( pBo.X() * ( 1. - rZ ) + pTo.X() * rZ  +
+                                    pFr.X() * ( 1. - rY ) + pBa.X() * rY ));
+        params.SetCoord( 2, 0.5 * ( pBo.Y() * ( 1. - rZ ) + pTo.Y() * rZ  +
+                                    pLe.Y() * ( 1. - rX ) + pRi.Y() * rX ));
+        params.SetCoord( 3, 0.5 * ( pFr.Z() * ( 1. - rY ) + pBa.Z() * rY  +
+                                    pLe.Z() * ( 1. - rX ) + pRi.Z() * rX ));
+
         // projection points on vertical edges
-        pointsOnShapes[ SMESH_Block::ID_E00z ] = fFront->GetXYZ( 0, z );    
-        pointsOnShapes[ SMESH_Block::ID_E10z ] = fFront->GetXYZ( X, z );    
-        pointsOnShapes[ SMESH_Block::ID_E01z ] = fBack->GetXYZ( 0, z );    
+        pointsOnShapes[ SMESH_Block::ID_E00z ] = fFront->GetXYZ( 0, z );
+        pointsOnShapes[ SMESH_Block::ID_E10z ] = fFront->GetXYZ( X, z );
+        pointsOnShapes[ SMESH_Block::ID_E01z ] = fBack->GetXYZ( 0, z );
         pointsOnShapes[ SMESH_Block::ID_E11z ] = fBack->GetXYZ( X, z );
         // projection points on vertical faces
-        pointsOnShapes[ SMESH_Block::ID_Fx0z ] = fFront->GetXYZ( x, z );    
-        pointsOnShapes[ SMESH_Block::ID_Fx1z ] = fBack ->GetXYZ( x, z );    
-        pointsOnShapes[ SMESH_Block::ID_F0yz ] = fLeft ->GetXYZ( y, z );    
+        pointsOnShapes[ SMESH_Block::ID_Fx0z ] = fFront->GetXYZ( x, z );
+        pointsOnShapes[ SMESH_Block::ID_Fx1z ] = fBack ->GetXYZ( x, z );
+        pointsOnShapes[ SMESH_Block::ID_F0yz ] = fLeft ->GetXYZ( y, z );
         pointsOnShapes[ SMESH_Block::ID_F1yz ] = fRight->GetXYZ( y, z );
 
         // compute internal node coordinates
         gp_XYZ coords;
         SMESH_Block::ShellPoint( params, pointsOnShapes, coords );
         column[ z ] = helper.AddNode( coords.X(), coords.Y(), coords.Z() );
-
       }
     }
   }
@@ -747,6 +815,39 @@ bool StdMeshers_Hexa_3D::Compute(SMESH_Mesh & aMesh, SMESH_MesherHelper* aHelper
   algo->Compute( aMesh, aHelper );
   return error( algo->GetComputeError());
 }
+
+//================================================================================
+/*!
+ * \brief Return true if the algorithm can mesh this shape
+ *  \param [in] aShape - shape to check
+ *  \param [in] toCheckAll - if true, this check returns OK if all shapes are OK,
+ *              else, returns OK if at least one shape is OK
+ */
+//================================================================================
+
+bool StdMeshers_Hexa_3D::IsApplicable( const TopoDS_Shape & aShape, bool toCheckAll )
+{
+  TopExp_Explorer exp0( aShape, TopAbs_SOLID );
+  if ( !exp0.More() ) return false;
+
+  for ( ; exp0.More(); exp0.Next() )
+  {
+    int nbFoundShells = 0;
+    TopExp_Explorer exp1( exp0.Current(), TopAbs_SHELL );
+    for ( ; exp1.More(); exp1.Next(), ++nbFoundShells)
+      if ( nbFoundShells == 2 ) break;
+    if ( nbFoundShells != 1 ) {
+      if ( toCheckAll ) return false;
+      continue;
+    }   
+    exp1.Init( exp0.Current(), TopAbs_FACE );
+    int nbEdges = SMESH_MesherHelper::Count( exp1.Current(), TopAbs_EDGE, /*ignoreSame=*/true );
+    bool ok = ( nbEdges > 3 );
+    if ( toCheckAll && !ok ) return false;
+    if ( !toCheckAll && ok ) return true;
+  }
+  return toCheckAll;
+};
 
 //=======================================================================
 //function : ComputePentahedralMesh
