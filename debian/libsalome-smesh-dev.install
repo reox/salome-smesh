@@ -1,0 +1,3 @@
+usr/lib/*/*.so
+usr/include/smesh/*
+usr/cmake/*.cmake usr/lib/cmake/salome-smesh

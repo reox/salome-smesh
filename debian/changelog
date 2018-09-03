@@ -1,9 +1,8 @@
-salome-smesh (6.5.0-3) experimental; urgency=low
+salome-smesh (8.3.0.1-1) experimental; urgency=medium
 
-  * Add debug package.
-  * Fix use after free in SMESHGUI_Hypotheses.
+  * New upstream release
 
- -- Julien Cristau <julien.cristau@logilab.fr>  Thu, 22 Nov 2012 14:20:15 +0100
+ -- Kurt Kremitzki <kurt@kwk.systems>  Fri, 10 Aug 2018 00:29:09 -0500
 
 salome-smesh (6.5.0-2) experimental; urgency=low
 
