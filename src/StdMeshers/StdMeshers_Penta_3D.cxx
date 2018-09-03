@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -33,12 +33,14 @@
 #include "SMDS_MeshElement.hxx"
 #include "SMDS_VolumeOfNodes.hxx"
 #include "SMDS_VolumeTool.hxx"
+#include "SMESHDS_Mesh.hxx"
 #include "SMESHDS_SubMesh.hxx"
+#include "SMESH_Comment.hxx"
 #include "SMESH_Mesh.hxx"
+#include "SMESH_MeshAlgos.hxx"
 #include "SMESH_MesherHelper.hxx"
 #include "SMESH_subMesh.hxx"
 #include "SMESH_subMeshEventListener.hxx"
-#include "SMESH_Comment.hxx"
 
 #include <BRep_Tool.hxx>
 #include <TopExp.hxx>
@@ -94,8 +96,6 @@ StdMeshers_Penta_3D::~StdMeshers_Penta_3D()
 bool StdMeshers_Penta_3D::Compute(SMESH_Mesh& aMesh, 
                                   const TopoDS_Shape& aShape)
 {
-  MESSAGE("StdMeshers_Penta_3D::Compute()");
-  //
   bool bOK=false;
   //
   myShape=aShape;
@@ -359,7 +359,7 @@ void StdMeshers_Penta_3D::MakeNodes()
     // set XYZ on horizontal edges and get node columns of faces:
     // 2 columns for each face, between which a base node is located
     vector<const SMDS_MeshNode*>* nColumns[8];
-    double ratio[ NB_WALL_FACES ]; // base node position between columns [0.-1.]
+    double ratio[ NB_WALL_FACES ] = {0,0,0,0}; // base node position between columns [0.-1.]
     if ( createNode ) {
       for ( k = 0; k < NB_WALL_FACES ; ++k ) {
         ratio[ k ] = SetHorizEdgeXYZ (aBNXYZ, wallFaceID[ k ],
@@ -424,7 +424,7 @@ void StdMeshers_Penta_3D::MakeNodes()
       //   suporting shape ID
       ShapeSupportID(bIsUpperLayer, aBNSSID, aSSID);
       if (!myErrorStatus->IsOK()) {
-        MESSAGE("StdMeshers_Penta_3D::MakeNodes() ");
+        MESSAGE("StdMeshers_Penta_3D::MakeNodes() pb");
         return;
       }
       //
@@ -471,7 +471,7 @@ void StdMeshers_Penta_3D::MakeNodes()
         }
       }
       if (!myErrorStatus->IsOK()) {
-        MESSAGE("StdMeshers_Penta_3D::MakeNodes() ");
+        MESSAGE("StdMeshers_Penta_3D::MakeNodes() err");
         return;
       }
       //
@@ -656,7 +656,7 @@ void StdMeshers_Penta_3D::MakeVolumeMesh()
   }
   //
   // 2. Make pentahedrons
-  int aID0, k , aJ[3];
+  int aID0, k , aJ[4];
   vector<const SMDS_MeshNode*> aN;
   //
   SMDS_ElemIteratorPtr itf, aItNodes;
@@ -673,7 +673,7 @@ void StdMeshers_Penta_3D::MakeVolumeMesh()
     int nbFaceNodes = pE0->NbNodes();
     if(myCreateQuadratic)
       nbFaceNodes = nbFaceNodes/2;
-    if ( aN.size() < nbFaceNodes * 2 )
+    if ( (int) aN.size() < nbFaceNodes * 2 )
       aN.resize( nbFaceNodes * 2 );
     //
     for ( k=0; k<nbFaceNodes; ++k ) {
@@ -683,7 +683,7 @@ void StdMeshers_Penta_3D::MakeVolumeMesh()
       aID0 = pNode->GetID();
       aJ[k] = GetIndexOnLayer(aID0);
       if (!myErrorStatus->IsOK()) {
-        MESSAGE("StdMeshers_Penta_3D::MakeVolumeMesh");
+        MESSAGE("StdMeshers_Penta_3D::MakeVolumeMesh pb");
         return;
       }
     }
@@ -805,7 +805,7 @@ void StdMeshers_Penta_3D::MakeMeshOnFxy1()
     aNbNodes = pE0->NbNodes();
     if(myCreateQuadratic)
       aNbNodes = aNbNodes/2;
-    if ( aNodes1.size() < aNbNodes )
+    if ( (int) aNodes1.size() < aNbNodes )
       aNodes1.resize( aNbNodes );
     //
     k = aNbNodes-1; // reverse a face
@@ -818,7 +818,7 @@ void StdMeshers_Penta_3D::MakeMeshOnFxy1()
       aID0 = pNode->GetID();
       aJ = GetIndexOnLayer(aID0);
       if (!myErrorStatus->IsOK()) {
-        MESSAGE("StdMeshers_Penta_3D::MakeMeshOnFxy1() ");
+        MESSAGE("StdMeshers_Penta_3D::MakeMeshOnFxy1() pb");
         return;
       }
       //
@@ -1045,7 +1045,7 @@ void StdMeshers_Penta_3D::MakeBlock()
           if (iCnt>1) {
             // \begin{E.A.}
             // The current algorithm fails if there is more that one
-            // face wich contains triangles ...
+            // face which contains triangles ...
             // In that case, replace return by break to try another
             // method (coded in "if (iCnt != 1) { ... }")
             //
@@ -1222,7 +1222,7 @@ void StdMeshers_Penta_3D::MakeBlock()
   // 1.1 Base vertex V000
   iNbE = aME.Extent();
   if (iNbE!= NB_WALL_FACES ){
-    MESSAGE("StdMeshers_Penta_3D::MakeBlock() ");
+    MESSAGE("StdMeshers_Penta_3D::MakeBlock() err");
     myErrorStatus->myName=7; // too few edges are in base face aFTr
     myErrorStatus->myComment=SMESH_Comment("Not a quadrilateral face #")
       <<pMesh->GetMeshDS()->ShapeToIndex( aFTr )<<": "<<iNbE<<" edges" ;
@@ -1239,7 +1239,7 @@ void StdMeshers_Penta_3D::MakeBlock()
   }
   iNbEV=aMEV.Extent();
   if (iNbEV!=3){
-    MESSAGE("StdMeshers_Penta_3D::MakeBlock() ");
+    MESSAGE("StdMeshers_Penta_3D::MakeBlock() err");
     myErrorStatus->myName=7; // too few edges meet in base vertex 
     myErrorStatus->myComment=SMESH_Comment("3 edges must share vertex #")
       <<pMesh->GetMeshDS()->ShapeToIndex( aV000 )<<" but there are "<<iNbEV<<" edges";
@@ -1266,7 +1266,7 @@ void StdMeshers_Penta_3D::MakeBlock()
   }
   //
   if (!bFound) {
-    MESSAGE("StdMeshers_Penta_3D::MakeBlock() ");
+    MESSAGE("StdMeshers_Penta_3D::MakeBlock() err");
     myErrorStatus->myName=8; // can not find reper V001
     myErrorStatus->myComment=SMESH_Comment("Can't find opposite vertex for vertex #")
       <<pMesh->GetMeshDS()->ShapeToIndex( aV000 );
@@ -1366,7 +1366,7 @@ bool StdMeshers_Penta_3D::LoadIJNodes(StdMeshers_IJNodeMap & theIJNodes,
 
   // find the other edges of theFace and orientation of e1
   TopoDS_Edge e1, e2, eTop;
-  bool rev1, CumOri = false;
+  bool rev1 = false, CumOri = false;
   TopExp_Explorer exp( theFace, TopAbs_EDGE );
   int nbEdges = 0;
   for ( ; exp.More(); exp.Next() ) {
@@ -1475,7 +1475,7 @@ bool StdMeshers_Penta_3D::LoadIJNodes(StdMeshers_IJNodeMap & theIJNodes,
     nVec.resize( vsize, nullNode );
     loadedNodes.insert( nVec[ 0 ] = node );
   }
-  if ( theIJNodes.size() != hsize ) {
+  if ( (int) theIJNodes.size() != hsize ) {
     MESSAGE( "Wrong node positions on theBaseEdge" );
     return false;
   }
@@ -1533,7 +1533,7 @@ bool StdMeshers_Penta_3D::LoadIJNodes(StdMeshers_IJNodeMap & theIJNodes,
     const SMDS_MeshElement* face = 0;
     do {
       // look for a face by 2 nodes
-      face = SMESH_MeshEditor::FindFaceInSet( n1, n2, allFaces, foundFaces );
+      face = SMESH_MeshAlgos::FindFaceInSet( n1, n2, allFaces, foundFaces );
       if ( face ) {
         int nbFaceNodes = face->NbNodes();
         if ( (!myCreateQuadratic && nbFaceNodes>4) ||
@@ -1861,8 +1861,6 @@ bool StdMeshers_Penta_3D::Evaluate(SMESH_Mesh& aMesh,
                                    const TopoDS_Shape& aShape,
                                    MapShapeNbElems& aResMap)
 {
-  MESSAGE("StdMeshers_Penta_3D::Evaluate()");
-
   // find face contains only triangles
   vector < SMESH_subMesh * >meshFaces;
   TopTools_SequenceOfShape aFaces;

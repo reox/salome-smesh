@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -28,6 +28,8 @@
 //
 #include "StdMeshers_SegmentAroundVertex_0D.hxx"
 
+#include <TopAbs_ShapeEnum.hxx>
+
 //=======================================================================
 //function : StdMeshers_SegmentAroundVertex_0D
 //purpose  : 
@@ -38,7 +40,7 @@ StdMeshers_SegmentAroundVertex_0D::StdMeshers_SegmentAroundVertex_0D
   :SMESH_0D_Algo(hypId, studyId, gen)
 {
   _name = "SegmentAroundVertex_0D";
-  // it is assigned to vertices but influence a state of EDGE submeshes 
+  // it is assigned to vertices but influence a state of EDGE submeshes
   _shapeType = (1 << TopAbs_VERTEX);    // 1 bit per shape type
 
   _compatibleHypothesis.push_back("SegmentLengthAroundVertex");
@@ -55,16 +57,17 @@ StdMeshers_SegmentAroundVertex_0D::~StdMeshers_SegmentAroundVertex_0D()
 
 //=======================================================================
 //function : CheckHypothesis
-//purpose  : 
+//purpose  :
 //=======================================================================
 
-bool StdMeshers_SegmentAroundVertex_0D::CheckHypothesis(SMESH_Mesh&                          aMesh,
-                                                        const TopoDS_Shape&                  aShape,
-                                                        SMESH_Hypothesis::Hypothesis_Status& aStatus)
+bool StdMeshers_SegmentAroundVertex_0D::
+CheckHypothesis(SMESH_Mesh&                          aMesh,
+                const TopoDS_Shape&                  aShape,
+                SMESH_Hypothesis::Hypothesis_Status& aStatus)
 {
-  list <const SMESHDS_Hypothesis * >::const_iterator itl;
+  std::list <const SMESHDS_Hypothesis * >::const_iterator itl;
 
-  const list <const SMESHDS_Hypothesis * >&hyps = GetUsedHypothesis(aMesh, aShape);
+  const std::list <const SMESHDS_Hypothesis * >&hyps = GetUsedHypothesis(aMesh, aShape);
   if ( hyps.size() == 0 )
   {
     aStatus = SMESH_Hypothesis::HYP_MISSING;
@@ -84,7 +87,7 @@ bool StdMeshers_SegmentAroundVertex_0D::CheckHypothesis(SMESH_Mesh&             
 
 //=======================================================================
 //function : Compute
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 bool StdMeshers_SegmentAroundVertex_0D::Compute(SMESH_Mesh&, const TopoDS_Shape&)

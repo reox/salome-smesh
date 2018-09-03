@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,6 @@
 //  File   : DriverMED_Family.cxx
 //  Author : Julia DOROVSKIKH
 //  Module : SMESH
-//  $Header: /home/server/cvs/SMESH/SMESH_SRC/src/DriverMED/DriverMED_Family.cxx,v 1.18.2.1.6.5.8.1 2012-04-13 09:31:03 vsr Exp $
 //
 #include "DriverMED_Family.h"
 #include "MED_Factory.hxx"
@@ -70,7 +69,7 @@ void
 DriverMED_Family
 ::AddElement(const SMDS_MeshElement* theElement)
 {
-  myElements.insert(theElement); 
+  myElements.insert( myElements.end(), theElement );
 }
 
 void
@@ -146,32 +145,36 @@ DriverMED_Family
 //=============================================================================
 DriverMED_FamilyPtrList 
 DriverMED_Family
-::MakeFamilies(const SMESHDS_SubMeshPtrMap& theSubMeshes,
+::MakeFamilies(SMESHDS_SubMeshIteratorPtr      theSubMeshes,
                const SMESHDS_GroupBasePtrList& theGroups,
                const bool doGroupOfNodes,
                const bool doGroupOfEdges,
                const bool doGroupOfFaces,
-               const bool doGroupOfVolumes)
+               const bool doGroupOfVolumes,
+               const bool doGroupOf0DElems,
+               const bool doGroupOfBalls,
+               const bool doAllInGroups)
 {
   DriverMED_FamilyPtrList aFamilies;
 
-  string anAllNodesGroupName = "Group_Of_All_Nodes";
-  string anAllEdgesGroupName = "Group_Of_All_Edges";
-  string anAllFacesGroupName = "Group_Of_All_Faces";
+  string anAllNodesGroupName   = "Group_Of_All_Nodes";
+  string anAllEdgesGroupName   = "Group_Of_All_Edges";
+  string anAllFacesGroupName   = "Group_Of_All_Faces";
   string anAllVolumesGroupName = "Group_Of_All_Volumes";
+  string anAll0DElemsGroupName = "Group_Of_All_0DElems";
+  string anAllBallsGroupName   = "Group_Of_All_Balls";
 
-  // Reserve four ids for families of free elements
-  // (1 - nodes, -1 - edges, -2 - faces, -3 - volumes).
+  // Reserve 6 ids for families of free elements
+  // (1 - nodes, -1 - edges, -2 - faces, -3 - volumes, -4 - 0D, -5 - balls).
   // 'Free' means here not belonging to any group.
   int aNodeFamId = FIRST_NODE_FAMILY;
   int aElemFamId = FIRST_ELEM_FAMILY;
 
   // Process sub-meshes
-  SMESHDS_SubMeshPtrMap::const_iterator aSMIter = theSubMeshes.begin();
-  for (; aSMIter != theSubMeshes.end(); aSMIter++)
+  while ( theSubMeshes->more() )
   {
-    const int anId = aSMIter->first;
-    SMESHDS_SubMesh* aSubMesh = aSMIter->second;
+    SMESHDS_SubMesh* aSubMesh = const_cast< SMESHDS_SubMesh* >( theSubMeshes->next() );
+    const int anId = aSubMesh->GetID();
     if ( aSubMesh->IsComplexSubmesh() )
       continue; // submesh containing other submeshs
     DriverMED_FamilyPtrList aSMFams = SplitByType(aSubMesh,anId);
@@ -263,6 +266,12 @@ DriverMED_Family
       else if (aFam->myType == SMDSAbs_Volume) {
         if (doGroupOfVolumes) aFam->myGroupNames.insert(anAllVolumesGroupName);
       }
+      else if (aFam->myType == SMDSAbs_0DElement) {
+        if (doGroupOfVolumes) aFam->myGroupNames.insert(anAll0DElemsGroupName);
+      }
+      else if (aFam->myType == SMDSAbs_Ball) {
+        if (doGroupOfVolumes) aFam->myGroupNames.insert(anAllBallsGroupName);
+      }
     }
   }
 
@@ -303,10 +312,56 @@ DriverMED_Family
     aFamilies.push_back(aFreeVolumesFam);
   }
 
+  if (doGroupOf0DElems)
+  {
+    DriverMED_FamilyPtr aFree0DFam (new DriverMED_Family);
+    aFree0DFam->SetId(REST_0DELEM_FAMILY);
+    aFree0DFam->myType = SMDSAbs_0DElement;
+    aFree0DFam->myGroupNames.insert(anAll0DElemsGroupName);
+    aFamilies.push_back(aFree0DFam);
+  }
+
+  if (doGroupOfBalls)
+  {
+    DriverMED_FamilyPtr aFreeBallsFam (new DriverMED_Family);
+    aFreeBallsFam->SetId(REST_BALL_FAMILY);
+    aFreeBallsFam->myType = SMDSAbs_Ball;
+    aFreeBallsFam->myGroupNames.insert(anAllBallsGroupName);
+    aFamilies.push_back(aFreeBallsFam);
+  }
+
   DriverMED_FamilyPtr aNullFam (new DriverMED_Family);
-  aNullFam->SetId(0);
+  aNullFam->SetId( 0 );
   aNullFam->myType = SMDSAbs_All;
   aFamilies.push_back(aNullFam);
+
+  if ( doAllInGroups )
+  {
+    if ( !doGroupOfEdges )
+    {
+      DriverMED_FamilyPtr aNigEdgeFam (new DriverMED_Family);
+      aNigEdgeFam->SetId( NIG_EDGES_FAMILY );
+      aNigEdgeFam->myType = SMDSAbs_Edge;
+      aNigEdgeFam->myGroupNames.insert( NIG_GROUP_PREFIX "_EDGES" );
+      aFamilies.push_back(aNigEdgeFam);
+    }
+    if ( !doGroupOfFaces )
+    {
+      DriverMED_FamilyPtr aNigFaceFam (new DriverMED_Family);
+      aNigFaceFam->SetId( NIG_FACES_FAMILY );
+      aNigFaceFam->myType = SMDSAbs_Face;
+      aNigFaceFam->myGroupNames.insert( NIG_GROUP_PREFIX "_FACES" );
+      aFamilies.push_back(aNigFaceFam);
+    }
+    if ( !doGroupOfVolumes )
+    {
+      DriverMED_FamilyPtr aNigVolFam (new DriverMED_Family);
+      aNigVolFam->SetId( NIG_VOLS_FAMILY );
+      aNigVolFam->myType = SMDSAbs_Volume;
+      aNigVolFam->myGroupNames.insert( NIG_GROUP_PREFIX "_VOLS" );
+      aFamilies.push_back(aNigVolFam);
+    }
+  }
 
   return aFamilies;
 }
@@ -316,7 +371,7 @@ DriverMED_Family
  *  Create TFamilyInfo for this family
  */
 //=============================================================================
-MED::PFamilyInfo 
+MED::PFamilyInfo
 DriverMED_Family::GetFamilyInfo(const MED::PWrapper& theWrapper, 
                                 const MED::PMeshInfo& theMeshInfo) const
 {
@@ -329,9 +384,9 @@ DriverMED_Family::GetFamilyInfo(const MED::PWrapper& theWrapper,
   string aValue = aStr.str();
   // PAL19785,0019867 - med forbids whitespace to be the last char in the name
   int maxSize;
-  if ( theWrapper->GetVersion() == MED::eV2_1 )
-    maxSize = MED::GetNOMLength<MED::eV2_1>();
-  else
+  //if ( theWrapper->GetVersion() == MED::eV2_1 )
+  //  maxSize = MED::GetNOMLength<MED::eV2_1>();
+  //else
     maxSize = MED::GetNOMLength<MED::eV2_2>();
   int lastCharPos = min( maxSize, (int) aValue.size() ) - 1;
   while ( isspace( aValue[ lastCharPos ] ))
@@ -388,7 +443,7 @@ void DriverMED_Family::Init (SMESHDS_GroupBase* theGroup)
   SMDS_ElemIteratorPtr elemIt = theGroup->GetElements();
   while (elemIt->more())
   {
-    myElements.insert(elemIt->next());
+    myElements.insert( myElements.end(), elemIt->next() );
   }
 
   // Type
@@ -399,9 +454,9 @@ void DriverMED_Family::Init (SMESHDS_GroupBase* theGroup)
   myGroupNames.insert(string(theGroup->GetStoreName()));
 
   Quantity_Color aColor = theGroup->GetColor();
-  double aRed = aColor.Red();
+  double aRed   = aColor.Red();
   double aGreen = aColor.Green();
-  double aBlue = aColor.Blue();
+  double aBlue  = aColor.Blue();
   int aR = int( aRed*255   );
   int aG = int( aGreen*255 );
   int aB = int( aBlue*255  );
@@ -419,15 +474,16 @@ void DriverMED_Family::Init (SMESHDS_GroupBase* theGroup)
  */
 //=============================================================================
 DriverMED_FamilyPtrList 
-DriverMED_Family
-::SplitByType (SMESHDS_SubMesh* theSubMesh,
-               const int        theId)
+DriverMED_Family::SplitByType (SMESHDS_SubMesh* theSubMesh,
+                               const int        theId)
 {
   DriverMED_FamilyPtrList aFamilies;
   DriverMED_FamilyPtr aNodesFamily   (new DriverMED_Family);
   DriverMED_FamilyPtr anEdgesFamily  (new DriverMED_Family);
   DriverMED_FamilyPtr aFacesFamily   (new DriverMED_Family);
   DriverMED_FamilyPtr aVolumesFamily (new DriverMED_Family);
+  // DriverMED_FamilyPtr a0DElemsFamily (new DriverMED_Family);
+  // DriverMED_FamilyPtr aBallsFamily   (new DriverMED_Family);
 
   char submeshGrpName[ 30 ];
   sprintf( submeshGrpName, "SubMesh %d", theId );
@@ -494,13 +550,14 @@ void DriverMED_Family::Split (DriverMED_FamilyPtr by,
                               DriverMED_FamilyPtr common)
 {
   // Elements
-  ElementsSet::iterator anIter = by->myElements.begin();
+  ElementsSet::iterator anIter = by->myElements.begin(), elemInMe;
   while ( anIter != by->myElements.end())
   {
-    if (myElements.find(*anIter) != myElements.end())
+    elemInMe = myElements.find(*anIter);
+    if (elemInMe != myElements.end())
     {
       common->myElements.insert(*anIter);
-      myElements.erase(*anIter);
+      myElements.erase(elemInMe);
       by->myElements.erase(anIter++);
     }
     else
@@ -511,11 +568,7 @@ void DriverMED_Family::Split (DriverMED_FamilyPtr by,
   {
     // Groups list
     common->myGroupNames = myGroupNames;
-    MED::TStringSet::iterator aGrNamesIter = by->myGroupNames.begin();
-    for (; aGrNamesIter != by->myGroupNames.end(); aGrNamesIter++)
-    {
-      common->myGroupNames.insert(*aGrNamesIter);
-    }
+    common->myGroupNames.insert( by->myGroupNames.begin(), by->myGroupNames.end() );
 
     // Type
     common->myType = myType;

@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -121,23 +121,28 @@ namespace
   //================================================================================
 
   vector<SMESH_Group*> getValidGroups(const vector<SMESH_Group*>& groups,
-                                      StudyContextStruct*         studyContext)
+                                      StudyContextStruct*         studyContext,
+                                      bool                        loaded=false)
   {
     vector<SMESH_Group*> okGroups;
-    for ( int i = 0; i < groups.size(); ++i )
+    for ( size_t i = 0; i < groups.size(); ++i )
     {
       try
       {
         // we expect SIGSEGV on a dead group
         OCC_CATCH_SIGNALS;
         SMESH_Group* okGroup = 0;
-        map<int, SMESH_Mesh*>::iterator itm = itm = studyContext->mapMesh.begin();
+        map<int, SMESH_Mesh*>::iterator itm = studyContext->mapMesh.begin();
         for ( ; !okGroup && itm != studyContext->mapMesh.end(); itm++)
         {
           SMESH_Mesh::GroupIteratorPtr gIt = itm->second->GetGroups();
           while ( gIt->more() && !okGroup )
             if ( gIt->next() == groups[i] )
+            {
               okGroup = groups[i];
+              if ( loaded )
+                itm->second->Load();
+            }
         }
         if ( okGroup )
           okGroups.push_back( okGroup );
@@ -169,7 +174,7 @@ namespace
   {
     int tgtID = resMapKey.second;
     SMESH_Mesh* tgtMesh = 0;
-    map<int, SMESH_Mesh*>::iterator itm = itm = studyContext->mapMesh.begin();
+    map<int, SMESH_Mesh*>::iterator itm = studyContext->mapMesh.begin();
     for ( ; !tgtMesh && itm != studyContext->mapMesh.end(); itm++)
     {
       tgtMesh = (*itm).second;
@@ -193,14 +198,16 @@ namespace
 //=============================================================================
 /*!
  *  Returns groups to import elements from
+ *  \param [in] loaded - if \c true, meshes holding the groups are loaded
  */
 //=============================================================================
 
-const std::vector<SMESH_Group*>&  StdMeshers_ImportSource1D::GetGroups() const
+const std::vector<SMESH_Group*>&  StdMeshers_ImportSource1D::GetGroups(bool loaded) const
 {
   // filter off deleted groups
   vector<SMESH_Group*> okGroups = getValidGroups( _groups,
-                                                  _gen->GetStudyContext(_studyId) );
+                                                  _gen->GetStudyContext(_studyId),
+                                                  loaded);
   if ( okGroups.size() != _groups.size() )
     ((StdMeshers_ImportSource1D*)this)->_groups = okGroups;
 
@@ -243,7 +250,7 @@ std::vector<SMESH_Mesh*> StdMeshers_ImportSource1D::GetSourceMeshes() const
     StudyContextStruct* studyContext = _gen->GetStudyContext(_studyId);
     for ( set<int>::iterator id = meshIDs.begin(); id != meshIDs.end(); ++id )
     {
-      map<int, SMESH_Mesh*>::iterator itm = itm = studyContext->mapMesh.begin();
+      map<int, SMESH_Mesh*>::iterator itm = studyContext->mapMesh.begin();
       for ( ; itm != studyContext->mapMesh.end(); itm++)
       {
         SMESH_Mesh* mesh = (*itm).second;
@@ -387,7 +394,7 @@ void StdMeshers_ImportSource1D::RestoreGroups(const std::vector<SMESH_Group*>& g
   _groups = groups;
 
   _resultGroups.clear();
-  int i = 0;
+  size_t i = 0;
   while ( i < _resultGroupsStorage.size() )
   {
     int key1 = _resultGroupsStorage[i++];

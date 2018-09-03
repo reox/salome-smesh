@@ -1,9 +1,9 @@
-// Copyright (C) 2006-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2006-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -59,20 +59,20 @@ void counters::stats()
       }
 }
 
-chrono::chrono(int i) :
-  _ctr(i), _run(true)
+salome_chrono::salome_chrono(int i) :
+  _run(true), _ctr(i)
 {
   //MESSAGE("chrono::chrono " << _ctr << " " << _run);
   _start = clock();
 }
 
-chrono::~chrono()
+salome_chrono::~salome_chrono()
 {
   if (_run)
     stop();
 }
 
-void chrono::stop()
+void salome_chrono::stop()
 {
   //MESSAGE("chrono::stop " << _ctr << " " << _run);
   if (_run)

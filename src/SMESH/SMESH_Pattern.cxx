@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -25,6 +25,21 @@
 // Author    : Edward AGAPOV (eap)
 
 #include "SMESH_Pattern.hxx"
+
+#include "SMDS_EdgePosition.hxx"
+#include "SMDS_FacePosition.hxx"
+#include "SMDS_MeshElement.hxx"
+#include "SMDS_MeshFace.hxx"
+#include "SMDS_MeshNode.hxx"
+#include "SMDS_VolumeTool.hxx"
+#include "SMESHDS_Group.hxx"
+#include "SMESHDS_Mesh.hxx"
+#include "SMESHDS_SubMesh.hxx"
+#include "SMESH_Block.hxx"
+#include "SMESH_Mesh.hxx"
+#include "SMESH_MeshAlgos.hxx"
+#include "SMESH_MesherHelper.hxx"
+#include "SMESH_subMesh.hxx"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepTools.hxx>
@@ -60,20 +75,6 @@
 #include <gp_XY.hxx>
 #include <gp_XYZ.hxx>
 
-#include "SMDS_EdgePosition.hxx"
-#include "SMDS_FacePosition.hxx"
-#include "SMDS_MeshElement.hxx"
-#include "SMDS_MeshFace.hxx"
-#include "SMDS_MeshNode.hxx"
-#include "SMDS_VolumeTool.hxx"
-#include "SMESHDS_Group.hxx"
-#include "SMESHDS_Mesh.hxx"
-#include "SMESHDS_SubMesh.hxx"
-#include "SMESH_Block.hxx"
-#include "SMESH_Mesh.hxx"
-#include "SMESH_MesherHelper.hxx"
-#include "SMESH_subMesh.hxx"
-
 #include <Basics_OCCTVersion.hxx>
 
 #include <Basics_Utils.hxx>
@@ -85,20 +86,15 @@ typedef map< const SMDS_MeshElement*, int > TNodePointIDMap;
 
 #define smdsNode( elem ) static_cast<const SMDS_MeshNode*>( elem )
 
-//=======================================================================
-//function : SMESH_Pattern
-//purpose  : 
-//=======================================================================
-
-SMESH_Pattern::SMESH_Pattern ()
+namespace
 {
-}
+  
 //=======================================================================
 //function : getInt
 //purpose  : 
 //=======================================================================
 
-static inline int getInt( const char * theSring )
+inline int getInt( const char * theSring )
 {
   if ( *theSring < '0' || *theSring > '9' )
     return -1;
@@ -107,7 +103,7 @@ static inline int getInt( const char * theSring )
   int val = strtol( theSring, &ptr, 10 );
   if ( ptr == theSring ||
       // there must not be neither '.' nor ',' nor 'E' ...
-      (*ptr != ' ' && *ptr != '\n' && *ptr != '\0'))
+      (*ptr != ' ' && *ptr != '\n' && *ptr != '\0' && *ptr != '\r'))
     return -1;
 
   return val;
@@ -118,7 +114,7 @@ static inline int getInt( const char * theSring )
 //purpose  : 
 //=======================================================================
 
-static inline double getDouble( const char * theSring )
+inline double getDouble( const char * theSring )
 {
   char *ptr;
   return strtod( theSring, &ptr );
@@ -130,9 +126,9 @@ static inline double getDouble( const char * theSring )
 //           Return the number of the found tokens
 //=======================================================================
 
-static int readLine (list <const char*> & theFields,
-                     const char*        & theLineBeg,
-                     const bool           theClearFields )
+int readLine (list <const char*> & theFields,
+              const char*        & theLineBeg,
+              const bool           theClearFields )
 {
   if ( theClearFields )
     theFields.clear();
@@ -206,14 +202,71 @@ static int readLine (list <const char*> & theFields,
 }
 
 //=======================================================================
+//function : isRealSeam
+//purpose  : return true if an EDGE encounters twice in a FACE
+//=======================================================================
+
+// bool isRealSeam( const TopoDS_Edge& e, const TopoDS_Face& f )
+// {
+//   if ( BRep_Tool::IsClosed( e, f ))
+//   {
+//     int nb = 0;
+//     for (TopExp_Explorer exp( f, TopAbs_EDGE ); exp.More(); exp.Next())
+//       if ( exp.Current().IsSame( e ))
+//         if ( ++nb == 2 )
+//           return true;
+//   }
+//   return false;
+// }
+
+//=======================================================================
+//function : loadVE
+//purpose  : load VERTEXes and EDGEs in a map. Return nb loaded VERTEXes
+//=======================================================================
+
+int loadVE( const list< TopoDS_Edge > &          eList,
+            TopTools_IndexedMapOfOrientedShape & map )
+{
+  list< TopoDS_Edge >::const_iterator eIt = eList.begin();
+  // vertices
+  int nbV;
+  for ( eIt = eList.begin(); eIt != eList.end(); eIt++ )
+  {
+    nbV = map.Extent();
+    map.Add( TopExp::FirstVertex( *eIt, true ));
+    bool added = ( nbV < map.Extent() );
+    if ( !added ) { // vertex encountered twice
+      // a seam vertex have two corresponding key points
+      map.Add( TopExp::FirstVertex( *eIt, true ).Reversed());
+    }
+  }
+  nbV = map.Extent();
+
+  // edges
+  for ( eIt = eList.begin(); eIt != eList.end(); eIt++ )
+    map.Add( *eIt );
+
+  return nbV;
+}
+
+} // namespace
+
+//=======================================================================
+//function : SMESH_Pattern
+//purpose  :
+//=======================================================================
+
+SMESH_Pattern::SMESH_Pattern (): myToKeepNodes(false)
+{
+}
+
+//=======================================================================
 //function : Load
 //purpose  : Load a pattern from <theFile>
 //=======================================================================
 
 bool SMESH_Pattern::Load (const char* theFileContents)
 {
-  MESSAGE("Load( file ) ");
-
   Kernel_Utils::Localizer loc;
   
   // file structure:
@@ -221,7 +274,7 @@ bool SMESH_Pattern::Load (const char* theFileContents)
   // ! This is a comment
   // NB_POINTS               ! 1 integer - the number of points in the pattern.
   //   X1 Y1 [Z1]            ! 2 or 3 reals - nodes coordinates within 2D or 3D domain:
-  //   X2 Y2 [Z2]            ! the pattern dimention is defined by the number of coordinates
+  //   X2 Y2 [Z2]            ! the pattern dimension is defined by the number of coordinates
   //   ...
   // [ ID1 ID2 ... IDn ]     ! Indices of key-points for a 2D pattern (only).
   // ! elements description goes after all
@@ -244,7 +297,7 @@ bool SMESH_Pattern::Load (const char* theFileContents)
 
   //   X1 Y1 [Z1]            ! 2 or 3 reals - nodes coordinates within 2D or 3D domain:
 
-  // read the first point coordinates to define pattern dimention
+  // read the first point coordinates to define pattern dimension
   int dim = readLine( fields, lineBeg, clearFields );
   if ( dim == 2 )
     myIs2D = true;
@@ -358,8 +411,6 @@ bool SMESH_Pattern::Load (const char* theFileContents)
 
 bool SMESH_Pattern::Save (ostream& theFile)
 {
-  MESSAGE(" ::Save(file) " );
-  
   Kernel_Utils::Localizer loc;
     
   if ( !IsLoaded() ) {
@@ -444,15 +495,10 @@ static gp_XY project (const SMDS_MeshNode* theNode,
     MESSAGE( "SMESH_Pattern: point projection FAILED");
     return gp_XY(0.,0.);
   }
-  double u, v, minVal = DBL_MAX;
+  double u =0, v =0, minVal = DBL_MAX;
   for ( int i = theProjectorPS.NbExt(); i > 0; i-- )
-#if OCC_VERSION_LARGE > 0x06040000 // Porting to OCCT6.5.1
     if ( theProjectorPS.SquareDistance( i ) < minVal ) {
       minVal = theProjectorPS.SquareDistance( i );
-#else
-    if ( theProjectorPS.Value( i ) < minVal ) {
-      minVal = theProjectorPS.Value( i );
-#endif
       theProjectorPS.Point( i ).Parameter( u, v );
     }
   return gp_XY( u, v );
@@ -490,7 +536,7 @@ static bool isMeshBoundToShape(SMESHDS_Mesh *     aMeshDS,
                                SMESHDS_SubMesh *  aFaceSubmesh,
                                const bool         isMainShape)
 {
-  if ( isMainShape ) {
+  if ( isMainShape && aFaceSubmesh ) {
     // check that all faces are bound to aFaceSubmesh
     if ( aMeshDS->NbFaces() != aFaceSubmesh->NbElements() )
       return false;
@@ -514,11 +560,13 @@ static bool isMeshBoundToShape(SMESHDS_Mesh *     aMeshDS,
 
 bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
                           const TopoDS_Face& theFace,
-                          bool               theProject)
+                          bool               theProject,
+                          TopoDS_Vertex      the1stVertex,
+                          bool               theKeepNodes)
 {
-  MESSAGE(" ::Load(face) " );
   Clear();
   myIs2D = true;
+  myToKeepNodes = theKeepNodes;
 
   SMESHDS_Mesh * aMeshDS = theMesh->GetMeshDS();
   SMESHDS_SubMesh * fSubMesh = aMeshDS->MeshElements( theFace );
@@ -538,10 +586,9 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
 
   // check if face is closed
   bool isClosed = helper.HasSeam();
-  TopoDS_Vertex bidon;
   list<TopoDS_Edge> eList;
   list<TopoDS_Edge>::iterator elIt;
-  SMESH_Block::GetOrderedEdges( face, bidon, eList, myNbKeyPntInBoundary );
+  SMESH_Block::GetOrderedEdges( face, eList, myNbKeyPntInBoundary, the1stVertex );
 
   // check that requested or needed projection is possible
   bool isMainShape = theMesh->IsMainShape( face );
@@ -564,45 +611,31 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
 
   if ( needProject )
   {
-    MESSAGE("Project the submesh");
     // ---------------------------------------------------------------
     // The case where the submesh is projected to theFace
     // ---------------------------------------------------------------
 
     // get all faces
-    list< const SMDS_MeshElement* > faces;
-    if ( nbElems > 0 ) {
-      SMDS_ElemIteratorPtr fIt = fSubMesh->GetElements();
-      while ( fIt->more() ) {
-        const SMDS_MeshElement* f = fIt->next();
-        if ( f && f->GetType() == SMDSAbs_Face )
-          faces.push_back( f );
-      }
-    }
-    else {
-      SMDS_FaceIteratorPtr fIt = aMeshDS->facesIterator();
-      while ( fIt->more() )
-        faces.push_back( fIt->next() );
-    }
+    SMDS_ElemIteratorPtr fIt;
+    if ( nbElems > 0 )
+      fIt = fSubMesh->GetElements();
+    else
+      fIt = aMeshDS->elementsIterator( SMDSAbs_Face );
 
     // put nodes of all faces into the nodePointIDMap and fill myElemPointIDs
-    list< const SMDS_MeshElement* >::iterator fIt = faces.begin();
-    for ( ; fIt != faces.end(); ++fIt )
+    while ( fIt->more() )
     {
+      const SMDS_MeshElement* face = fIt->next();
       myElemPointIDs.push_back( TElemDef() );
       TElemDef& elemPoints = myElemPointIDs.back();
-      int nbNodes = (*fIt)->NbCornerNodes();
+      int nbNodes = face->NbCornerNodes();
       for ( int i = 0;i < nbNodes; ++i )
       {
-        const SMDS_MeshElement* node = (*fIt)->GetNode( i );
+        const SMDS_MeshElement* node = face->GetNode( i );
         TNodePointIDMap::iterator nIdIt = nodePointIDMap.insert( make_pair( node, -1 )).first;
         if ( nIdIt->second == -1 )
-        {
-          elemPoints.push_back( iPoint );
           nIdIt->second = iPoint++;
-        }
-        else
-          elemPoints.push_back( (*nIdIt).second );
+        elemPoints.push_back( (*nIdIt).second );
       }
     }
     myPoints.resize( iPoint );
@@ -623,7 +656,7 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
       const TopoDS_Vertex v = TopoDS::Vertex( vExp.Current() );
       gp_Pnt2d uv = BRep_Tool::Parameters( v, face );
       double minDist = DBL_MAX;
-      int index;
+      int index = 0;
       vector< TPoint >::const_iterator pVecIt = myPoints.begin();
       for ( iPoint = 0; pVecIt != myPoints.end(); pVecIt++, iPoint++ ) {
         double dist = uv.SquareDistance( (*pVecIt).myInitUV );
@@ -646,31 +679,34 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
 
     // Load shapes in the consequent order and count nb of points
 
-    // vertices
-    for ( elIt = eList.begin(); elIt != eList.end(); elIt++ ) {
-      int nbV = myShapeIDMap.Extent();
-      myShapeIDMap.Add( TopExp::FirstVertex( *elIt, true ));
-      bool added = ( nbV < myShapeIDMap.Extent() );
-      if ( !added ) { // vertex encountered twice
-        // a seam vertex have two corresponding key points
-        myShapeIDMap.Add( TopExp::FirstVertex( *elIt, true ).Reversed());
-        ++nbNodes;
-      }
+    loadVE( eList, myShapeIDMap );
+    myShapeIDMap.Add( face );
+
+    nbNodes += myShapeIDMap.Extent() - 1;
+
+    for ( elIt = eList.begin(); elIt != eList.end(); elIt++ )
       if ( SMESHDS_SubMesh * eSubMesh = aMeshDS->MeshElements( *elIt ))
         nbNodes += eSubMesh->NbNodes() + 1;
-    }
-    // edges
-    for ( elIt = eList.begin(); elIt != eList.end(); elIt++ )
-      myShapeIDMap.Add( *elIt );
-    // the face
-    myShapeIDMap.Add( face );
 
     myPoints.resize( nbNodes );
 
     // Load U of points on edges
 
-    for ( elIt = eList.begin(); elIt != eList.end(); elIt++ )
+    list<int>::iterator nbEinW = myNbKeyPntInBoundary.begin();
+    int iE = 0;
+    vector< TopoDS_Edge > eVec;
+    for ( elIt = eList.begin(); elIt != eList.end(); elIt++, iE++ )
     {
+      if ( isClosed && ( iE == 0 || iE == *nbEinW ))
+      {
+        // new wire begins; put wire EDGEs in eVec
+        list<TopoDS_Edge>::iterator eEnd = elIt;
+        if ( iE == *nbEinW )
+          ++nbEinW;
+        std::advance( eEnd, *nbEinW );
+        eVec.assign( elIt, eEnd );
+        iE = 0;
+      }
       TopoDS_Edge & edge = *elIt;
       list< TPoint* > & ePoints = getShapePoints( edge );
       double f, l;
@@ -680,7 +716,7 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
       TopoDS_Shape v1 = TopExp::FirstVertex( edge, true ); // always FORWARD
       TopoDS_Shape v2 = TopExp::LastVertex( edge, true ); // always REVERSED
       // to make adjacent edges share key-point, we make v2 FORWARD too
-      // (as we have different points for same shape with different orienation)
+      // (as we have different points for same shape with different orientation)
       v2.Reverse();
 
       // on closed face we must have REVERSED some of seam vertices
@@ -692,18 +728,13 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
             v2.Reverse();
           }
         }
-        else { // on CLOSED edge (i.e. having one vertex with different orienations)
+        else { // on CLOSED edge (i.e. having one vertex with different orientations)
           for ( int is2 = 0; is2 < 2; ++is2 ) {
             TopoDS_Shape & v = is2 ? v2 : v1;
             if ( helper.IsRealSeam( v ) ) {
               // reverse or not depending on orientation of adjacent seam
-              TopoDS_Edge seam;
-              list<TopoDS_Edge>::iterator eIt2 = elIt;
-              if ( is2 )
-                seam = ( ++eIt2 == eList.end() ? eList.front() : *eIt2 );
-              else
-                seam = ( eIt2 == eList.begin() ? eList.back() : *(--eIt2) );
-              if ( seam.Orientation() == TopAbs_REVERSED )
+              int iSeam = helper.WrapIndex( iE + ( is2 ? +1 : -1 ), eVec.size() );
+              if ( eVec[ iSeam ].Orientation() == TopAbs_REVERSED )
                 v.Reverse();
             }
           }
@@ -757,7 +788,7 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
           double u = epos->GetUParameter();
           paramNodeMap.insert( make_pair( u, node ));
         }
-        if ( paramNodeMap.size() != eSubMesh->NbNodes() ) {
+        if ((int) paramNodeMap.size() != eSubMesh->NbNodes() - nbMeduimNodes ) {
           // wrong U on edge, project
           Extrema_ExtPC proj;
           BRepAdaptor_Curve aCurve( edge );
@@ -783,7 +814,7 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
           }
 
           //rnv : To fix the bug IPAL21999 Pattern Mapping - New - collapse of pattern mesh
-          if ( paramNodeMap.size() != eSubMesh->NbNodes() - nbMeduimNodes )
+          if ((int) paramNodeMap.size() != eSubMesh->NbNodes() - nbMeduimNodes )
             return setErrorCode(ERR_UNEXPECTED);
         }
 
@@ -931,6 +962,19 @@ bool SMESH_Pattern::Load (SMESH_Mesh*        theMesh,
     myIsBoundaryPointsFound = true;
   }
 
+  if ( myToKeepNodes )
+  {
+    myInNodes.resize( nodePointIDMap.size() + closeNodePointIDMap.size() );
+
+    TNodePointIDMap::iterator nIdIt = nodePointIDMap.begin();
+    for ( ; nIdIt != nodePointIDMap.end(); nIdIt++ )
+      myInNodes[ nIdIt->second ] = smdsNode( nIdIt->first );
+
+    nIdIt = closeNodePointIDMap.begin();
+    for ( ; nIdIt != closeNodePointIDMap.end(); nIdIt++ )
+      myInNodes[ nIdIt->second ] = smdsNode( nIdIt->first );
+  }
+
   // Assure that U range is proportional to V range
 
   Bnd_Box2d bndBox;
@@ -998,6 +1042,7 @@ void SMESH_Pattern::computeUVOnEdge (const TopoDS_Edge&      theEdge,
     BRep_Tool::CurveOnSurface( theEdge, TopoDS::Face( myShape ), f, l );
 
   ePoints.back()->myInitU = 1.0;
+  //ePoints.front()->myInitU = 0.0; //myUV = C2d->Value( isForward ? f : l ).XY();
   list< TPoint* >::const_iterator pIt = ePoints.begin();
   for ( pIt++; pIt != ePoints.end(); pIt++ )
   {
@@ -1053,10 +1098,10 @@ static bool intersectIsolines(const gp_XY& uv11, const gp_XY& uv12, const double
 
 //   resUV /= 2.;
 //     }
-  if ( isDeformed ) {
-    MESSAGE("intersectIsolines(), d1 = " << d1 << ", d2 = " << d2 << ", delta = " << delta <<
-            ", " << (loc1 - loc2).SquareModulus() << " > " << delta * delta);
-  }
+  // if ( isDeformed ) {
+  //   MESSAGE("intersectIsolines(), d1 = " << d1 << ", d2 = " << d2 << ", delta = " << delta <<
+  //           ", " << (loc1 - loc2).SquareModulus() << " > " << delta * delta);
+  // }
   return true;
 }
 
@@ -1149,7 +1194,7 @@ bool SMESH_Pattern::compUVByIsoIntersection (const list< list< TPoint* > >& theB
   }
   if ( !intersectIsolines( uv1[0], uv2[0], ratio[0],
                           uv1[1], uv2[1], ratio[1], theUV, theIsDeformed )) {
-    MESSAGE(" Cant intersect isolines for a point "<<theInitUV.X()<<", "<<theInitUV.Y());
+    MESSAGE(" Can't intersect isolines for a point "<<theInitUV.X()<<", "<<theInitUV.Y());
     return setErrorCode( ERR_APPLF_BAD_TOPOLOGY );
   }
 
@@ -1170,7 +1215,7 @@ struct TIsoNode {
   TIsoNode* myNext[4]; // order: (iDir=0,isForward=0), (1,0), (0,1), (1,1)
   TIsoNode* myBndNodes[4];     // order: (iDir=0,i=0), (1,0), (0,1), (1,1)
   TIsoNode(double initU, double initV):
-    myInitUV( initU, initV ), myUV( 1e100, 1e100 ), myIsMovable(true)
+    myIsMovable(true), myInitUV( initU, initV ), myUV( 1e100, 1e100 )
   { myNext[0] = myNext[1] = myNext[2] = myNext[3] = 0; }
   bool IsUVComputed() const
   { return myUV.X() != 1e100; }
@@ -1419,7 +1464,7 @@ static bool checkQuads (const TIsoNode* node,
         return false;
       }
       else {
-        //MESSAGE(" Cant improve UV, uv: "<<uv.X()<<" "<<uv.Y());
+        //MESSAGE(" Can't improve UV, uv: "<<uv.X()<<" "<<uv.Y());
       }
     }
     if ( !oldIsIn && nbOldFix ) {
@@ -1434,7 +1479,7 @@ static bool checkQuads (const TIsoNode* node,
         return false;
       }
       else {
-        //MESSAGE(" Cant fix UV, uv: "<<uv.X()<<" "<<uv.Y());
+        //MESSAGE(" Can't fix UV, uv: "<<uv.X()<<" "<<uv.Y());
       }
     }
     if ( newIsIn && oldIsIn )
@@ -1851,7 +1896,7 @@ bool SMESH_Pattern::
   list < TIsoNode* > internNodes;
   bool needIteration = true;
   if ( startNodes.empty() ) {
-    MESSAGE( " Starting UV by compUVByIsoIntersection()");
+    //MESSAGE( " Starting UV by compUVByIsoIntersection()");
     needIteration = false;
     map < double, TIsoLine >& isos = isoMap[ 0 ];
     map < double, TIsoLine >::iterator isoIt = isos.begin();
@@ -2071,7 +2116,7 @@ bool SMESH_Pattern::
 #endif
   } while ( maxMove > 1e-8 && nbIter++ < maxNbIter );
 
-  MESSAGE( "compUVByElasticIsolines(): Nb iterations " << nbIter << " dist: " << sqrt( maxMove ));
+  //MESSAGE( "compUVByElasticIsolines(): Nb iterations " << nbIter << " dist: " << sqrt( maxMove ));
 
   if ( nbIter >= maxNbIter && sqrt(maxMove) > minUvSize * 0.05 ) {
     MESSAGE( "compUVByElasticIsolines() failed: "<<sqrt(maxMove)<<">"<<minUvSize * 0.05);
@@ -2252,7 +2297,7 @@ bool SMESH_Pattern::sortSameSizeWires (TListOfEdgesList &                theWire
       list< TPoint* > & ePoints = getShapePoints( eID++ );
       TPoint* p = ePoints.front();
       if ( !compUVByIsoIntersection( theEdgesPointsList, p->myInitUV, p->myUV, aBool )) {
-        MESSAGE("cant sortSameSizeWires()");
+        MESSAGE("can't sortSameSizeWires()");
         return false;
       }
       gcVec[iW] += p->myUV;
@@ -2303,7 +2348,7 @@ bool SMESH_Pattern::sortSameSizeWires (TListOfEdgesList &                theWire
 //   " \t vertex: " << vGcVec[iW].X() << " " << vGcVec[iW].Y() << endl;
     double minDist = DBL_MAX;
     gp_XY & wGc = vGcVec[ iW ];
-    int bIndex;
+    int bIndex = 0;
     for ( int iB = 0; iB < nbWires; iB++ ) {
       if ( bndFound[ iB ] ) continue;
       double dist = ( wGc - gcVec[ iB ] ).SquareModulus();
@@ -2356,7 +2401,6 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
                            const TopoDS_Vertex& theVertexOnKeyPoint1,
                            const bool           theReverse)
 {
-  MESSAGE(" ::Apply(face) " );
   TopoDS_Face face  = theReverse ? TopoDS::Face( theFace.Reversed() ) : theFace;
   if ( !setShapeToMesh( face ))
     return false;
@@ -2370,7 +2414,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
 
   list< TopoDS_Edge > eList;
   list< int >         nbVertexInWires;
-  int nbWires = SMESH_Block::GetOrderedEdges( face, theVertexOnKeyPoint1, eList, nbVertexInWires);
+  int nbWires = SMESH_Block::GetOrderedEdges( face, eList, nbVertexInWires, theVertexOnKeyPoint1);
   if ( !theVertexOnKeyPoint1.IsSame( TopExp::FirstVertex( eList.front(), true )))
   {
     MESSAGE( " theVertexOnKeyPoint1 not found in the outer wire ");
@@ -2386,36 +2430,10 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
   }
 
   // here shapes get IDs, for the outer wire IDs are OK
-  list<TopoDS_Edge>::iterator elIt = eList.begin();
-  for ( ; elIt != eList.end(); elIt++ ) {
-    myShapeIDMap.Add( TopExp::FirstVertex( *elIt, true ));
-    bool isClosed1 = BRep_Tool::IsClosed( *elIt, theFace );
-    // BEGIN: jfa for bug 0019943
-    if (isClosed1) {
-      isClosed1 = false;
-      for (TopExp_Explorer expw (theFace, TopAbs_WIRE); expw.More() && !isClosed1; expw.Next()) {
-        const TopoDS_Wire& wire = TopoDS::Wire(expw.Current());
-        int nbe = 0;
-        for (BRepTools_WireExplorer we (wire, theFace); we.More() && !isClosed1; we.Next()) {
-          if (we.Current().IsSame(*elIt)) {
-            nbe++;
-            if (nbe == 2) isClosed1 = true;
-          }
-        }
-      }
-    }
-    // END: jfa for bug 0019943
-    if (isClosed1)
-      myShapeIDMap.Add( TopExp::LastVertex( *elIt, true ));// vertex orienation is REVERSED
-  }
-  int nbVertices = myShapeIDMap.Extent();
-
-  for ( elIt = eList.begin(); elIt != eList.end(); elIt++ )
-    myShapeIDMap.Add( *elIt );
-
+  int nbVertices = loadVE( eList, myShapeIDMap );
   myShapeIDMap.Add( face );
 
-  if ( myShapeIDToPointsMap.size() != myShapeIDMap.Extent() ) {
+  if ((int) myShapeIDToPointsMap.size() != myShapeIDMap.Extent() ) {
     MESSAGE( myShapeIDToPointsMap.size() <<" != " << myShapeIDMap.Extent());
     return setErrorCode( ERR_APPLF_INTERNAL_EEROR );
   }
@@ -2424,10 +2442,11 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
   list< list< TPoint* > > edgesPointsList;
   edgesPointsList.push_back( list< TPoint* >() );
   list< TPoint* > * edgesPoints = & edgesPointsList.back();
-  list< TPoint* >::iterator pIt;
+  list< TPoint* >::iterator pIt, pEnd;
 
   // compute UV of points on the outer wire
   int iE, nbEdgesInOuterWire = nbVertexInWires.front();
+  list< TopoDS_Edge >::iterator elIt;
   for (iE = 0, elIt = eList.begin();
        iE < nbEdgesInOuterWire && elIt != eList.end();
        iE++, elIt++ )
@@ -2446,7 +2465,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
   if ( nbWires > 1 )
   {
     // compute UV of inner edge-points using the method for in-face points
-    // and devide eList into a list of separate wires
+    // and divide eList into a list of separate wires
     bool aBool;
     list< list< TopoDS_Edge > > wireList;
     list<TopoDS_Edge>::iterator eIt = elIt;
@@ -2463,7 +2482,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
         for (  pIt++; pIt != ePoints.end(); pIt++ ) {
           TPoint* p = (*pIt);
           if ( !compUVByIsoIntersection( edgesPointsList, p->myInitUV, p->myUV, aBool )) {
-            MESSAGE("cant Apply(face)");
+            MESSAGE("can't Apply(face)");
             return false;
           }
           // keep the computed UV to compare against by setFirstEdge()
@@ -2490,9 +2509,9 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
     while ( wlIt != wireList.end() )
     {
       list< TopoDS_Edge >& wire = (*wlIt);
-      int nbEdges = wire.size();
+      size_t nbEdges = wire.size();
       wlIt++;
-      if ( wlIt == wireList.end() || (*wlIt).size() != nbEdges ) // a unique size wire
+      if ( wlIt != wireList.end() && (*wlIt).size() != nbEdges ) // a unique size wire
       {
         // choose the best first edge of a wire
         setFirstEdge( wire, id1 );
@@ -2517,7 +2536,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
     wlIt = wireList.begin();
     while ( wlIt != wireList.end() )
     {
-      int nbSameSize = 0, nbEdges = (*wlIt).size();
+      size_t nbSameSize = 0, nbEdges = (*wlIt).size();
       list< list< TopoDS_Edge > >::iterator wlIt2 = wlIt;
       wlIt2++;
       while ( wlIt2 != wireList.end() && (*wlIt2).size() == nbEdges ) { // a same size wire
@@ -2542,13 +2561,23 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
     // re-fill myShapeIDMap - all shapes get good IDs
 
     myShapeIDMap.Clear();
-    for ( elIt = eList.begin(); elIt != eList.end(); elIt++ )
-      myShapeIDMap.Add( TopExp::FirstVertex( *elIt, true ));
-    for ( elIt = eList.begin(); elIt != eList.end(); elIt++ )
-      myShapeIDMap.Add( *elIt );
+    nbVertices = loadVE( eList, myShapeIDMap );
     myShapeIDMap.Add( face );
 
   } // there are inner wires
+
+  // Set XYZ of on-vertex points
+
+  // for ( int iV = 1; iV <= nbVertices; ++iV )
+  // {
+  //   const TopoDS_Vertex&    V = TopoDS::Vertex( myShapeIDMap( iV ));
+  //   list< TPoint* > & vPoints = getShapePoints( iV );
+  //   if ( !vPoints.empty() )
+  //   {
+  //     //vPoints.front()->myUV  = BRep_Tool::Parameters( V, theFace ).XY();
+  //     vPoints.front()->myXYZ = BRep_Tool::Pnt( V );
+  //   }
+  // }
 
   // Compute XYZ of on-edge points
 
@@ -2557,8 +2586,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
   {
     BRepAdaptor_Curve C3d( *elIt );
     list< TPoint* > & ePoints = getShapePoints( iE++ );
-    pIt = ePoints.begin();
-    for ( pIt++; pIt != ePoints.end(); pIt++ )
+    for ( pIt = ++ePoints.begin(), pEnd = ePoints.end(); pIt != pEnd; pIt++ )
     {
       TPoint* point = *pIt;
       point->myXYZ = C3d.Value( point->myU );
@@ -2573,7 +2601,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
   for ( pIt = fPoints.begin(); !isDeformed && pIt != fPoints.end(); pIt++ )
     if ( !compUVByIsoIntersection( edgesPointsList, (*pIt)->myInitUV,
                                   (*pIt)->myUV, isDeformed )) {
-      MESSAGE("cant Apply(face)");
+      MESSAGE("can't Apply(face)");
       return false;
     }
   // try to use a complex algo if it is a difficult case
@@ -2582,7 +2610,7 @@ bool SMESH_Pattern::Apply (const TopoDS_Face&   theFace,
     for ( ; pIt != fPoints.end(); pIt++ ) // continue with the simple algo
       if ( !compUVByIsoIntersection( edgesPointsList, (*pIt)->myInitUV,
                                     (*pIt)->myUV, isDeformed )) {
-        MESSAGE("cant Apply(face)");
+        MESSAGE("can't Apply(face)");
         return false;
       }
   }
@@ -2640,10 +2668,10 @@ bool SMESH_Pattern::Apply (const SMDS_MeshFace* theFace,
 
   list< const SMDS_MeshNode* > nodes;
   list< const SMDS_MeshNode* >::iterator n = nodes.end();
-  SMDS_ElemIteratorPtr noIt = theFace->nodesIterator();
+  SMDS_NodeIteratorPtr noIt = theFace->nodeIterator();
   int iSub = 0;
   while ( noIt->more() && iSub < nbFaceNodes ) {
-    const SMDS_MeshNode* node = smdsNode( noIt->next() );
+    const SMDS_MeshNode* node = noIt->next();
     nodes.push_back( node );
     if ( iSub++ == theNodeIndexOnKeyPoint1 )
       n = --nodes.end();
@@ -2660,7 +2688,7 @@ bool SMESH_Pattern::Apply (const SMDS_MeshFace* theFace,
   list< gp_XYZ > xyzList;
   myOrderedNodes.resize( nbFaceNodes );
   for ( iSub = 0, n = nodes.begin(); n != nodes.end(); ++n ) {
-    xyzList.push_back( gp_XYZ( (*n)->X(), (*n)->Y(), (*n)->Z() ));
+    xyzList.push_back( SMESH_TNodeXYZ( *n ));
     myOrderedNodes[ iSub++] = *n;
   }
 
@@ -2722,7 +2750,7 @@ bool SMESH_Pattern::Apply (const SMDS_MeshFace* theFace,
   for ( pIt = fPoints.begin(); !isDeformed && pIt != fPoints.end(); pIt++ )
     if ( !compUVByIsoIntersection( edgesPointsList, (*pIt)->myInitUV,
                                   (*pIt)->myUV, isDeformed )) {
-      MESSAGE("cant Apply(face)");
+      MESSAGE("can't Apply(face)");
       return false;
     }
   // try to use a complex algo if it is a difficult case
@@ -2731,7 +2759,7 @@ bool SMESH_Pattern::Apply (const SMDS_MeshFace* theFace,
     for ( ; pIt != fPoints.end(); pIt++ ) // continue with the simple algo
       if ( !compUVByIsoIntersection( edgesPointsList, (*pIt)->myInitUV,
                                     (*pIt)->myUV, isDeformed )) {
-        MESSAGE("cant Apply(face)");
+        MESSAGE("can't Apply(face)");
         return false;
       }
   }
@@ -2847,7 +2875,7 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*          theMesh,
 
   // compute UV and XYZ of points on edges
 
-  for ( int i = 0; i < myOrderedNodes.size(); ++i, ++iSub )
+  for ( size_t i = 0; i < myOrderedNodes.size(); ++i, ++iSub )
   {
     gp_XY& uv1 = keyUV[ i ];
     gp_XY& uv2 = ( i+1 < keyUV.size() ) ? keyUV[ i+1 ] : keyUV[ 0 ];
@@ -2875,7 +2903,7 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*          theMesh,
   for ( pIt = fPoints.begin(); !isDeformed && pIt != fPoints.end(); pIt++ )
     if ( !compUVByIsoIntersection( edgesPointsList, (*pIt)->myInitUV,
                                   (*pIt)->myUV, isDeformed )) {
-      MESSAGE("cant Apply(face)");
+      MESSAGE("can't Apply(face)");
       return false;
     }
   // try to use a complex algo if it is a difficult case
@@ -2884,7 +2912,7 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*          theMesh,
     for ( ; pIt != fPoints.end(); pIt++ ) // continue with the simple algo
       if ( !compUVByIsoIntersection( edgesPointsList, (*pIt)->myInitUV,
                                     (*pIt)->myUV, isDeformed )) {
-        MESSAGE("cant Apply(face)");
+        MESSAGE("can't Apply(face)");
         return false;
       }
   }
@@ -2962,11 +2990,6 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*                     theMesh,
   myXYZ.resize( myPoints.size() * theFaces.size(), undefinedXYZ() );
   myElements.reserve( theFaces.size() );
 
-  // to find point index
-  map< TPoint*, int > pointIndex;
-  for ( int i = 0; i < myPoints.size(); i++ )
-    pointIndex.insert( make_pair( & myPoints[ i ], i ));
-
   int ind1 = 0; // lowest point index for a face
 
   // meshed geometry
@@ -3018,7 +3041,7 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*                     theMesh,
     {
       list< TPoint* > & linkPoints = getShapePoints( eID++ );
       const SMDS_MeshNode* n1 = myOrderedNodes[ i ];
-      const SMDS_MeshNode* n2 = myOrderedNodes[ i + 1 == nbNodes ? 0 : i + 1 ];
+      const SMDS_MeshNode* n2 = myOrderedNodes[( i+1 ) % nbNodes ];
       // make a link and a node set
       TNodeSet linkSet, node1Set;
       linkSet.insert( n1 );
@@ -3027,7 +3050,7 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*                     theMesh,
       list< TPoint* >::iterator p = linkPoints.begin();
       {
         // map the first link point to n1
-        int nId = pointIndex[ *p ] + ind1;
+        int nId = ( *p - &myPoints[0] ) + ind1;
         myXYZIdToNodeMap[ nId ] = n1;
         list< list< int > >& groups = myIdsOnBoundary[ node1Set ];
         groups.push_back(list< int > ());
@@ -3039,7 +3062,7 @@ bool SMESH_Pattern::Apply (SMESH_Mesh*                     theMesh,
       list< int >& indList = groups.back();
       // add points to the map excluding the end points
       for ( p++; *p != linkPoints.back(); p++ )
-        indList.push_back( pointIndex[ *p ] + ind1 );
+        indList.push_back( ( *p - &myPoints[0] ) + ind1 );
     }
     ind1 += myPoints.size();
   }
@@ -3060,8 +3083,6 @@ bool SMESH_Pattern::Apply (std::set<const SMDS_MeshVolume*> & theVolumes,
                            const int                          theNode000Index,
                            const int                          theNode001Index)
 {
-  MESSAGE(" ::Apply(set<MeshVolumes>) " );
-
   if ( !IsLoaded() ) {
     MESSAGE( "Pattern not loaded" );
     return setErrorCode( ERR_APPL_NOT_LOADED );
@@ -3089,7 +3110,7 @@ bool SMESH_Pattern::Apply (std::set<const SMDS_MeshVolume*> & theVolumes,
 
   // to find point index
   map< TPoint*, int > pointIndex;
-  for ( int i = 0; i < myPoints.size(); i++ )
+  for ( size_t i = 0; i < myPoints.size(); i++ )
     pointIndex.insert( make_pair( & myPoints[ i ], i ));
 
   int ind1 = 0; // lowest point index for an element
@@ -3166,11 +3187,12 @@ bool SMESH_Pattern::Apply (std::set<const SMDS_MeshVolume*> & theVolumes,
 //=======================================================================
 
 bool SMESH_Pattern::Load (SMESH_Mesh*         theMesh,
-                          const TopoDS_Shell& theBlock)
+                          const TopoDS_Shell& theBlock,
+                          bool                theKeepNodes)
 {
-  MESSAGE(" ::Load(volume) " );
   Clear();
   myIs2D = false;
+  myToKeepNodes = theKeepNodes;
   SMESHDS_SubMesh * aSubMesh;
 
   const bool isQuadMesh = theMesh->NbVolumes( ORDER_QUADRATIC );
@@ -3204,7 +3226,7 @@ bool SMESH_Pattern::Load (SMESH_Mesh*         theMesh,
     SMDS_NodeIteratorPtr nIt = aSubMesh->GetNodes();
     if ( !nIt->more() ) continue;
 
-      // store a node and a point
+    // store a node and a point
     while ( nIt->more() ) {
       const SMDS_MeshNode* node = smdsNode( nIt->next() );
       if ( isQuadMesh && SMESH_MeshEditor::IsMedium( node, SMDSAbs_Volume ))
@@ -3282,6 +3304,14 @@ bool SMESH_Pattern::Load (SMESH_Mesh*         theMesh,
 
   myIsBoundaryPointsFound = true;
 
+  if ( myToKeepNodes )
+  {
+    myInNodes.resize( nodePointIDMap.size() );
+    TNodePointIDMap::iterator nIdIt = nodePointIDMap.begin();
+    for ( ; nIdIt != nodePointIDMap.end(); nIdIt++ )
+      myInNodes[ nIdIt->second ] = smdsNode( nIdIt->first );
+  }
+
   return setErrorCode( ERR_OK );
 }
 
@@ -3323,8 +3353,6 @@ bool SMESH_Pattern::Apply (const TopoDS_Shell&  theBlock,
                            const TopoDS_Vertex& theVertex000,
                            const TopoDS_Vertex& theVertex001)
 {
-  MESSAGE(" ::Apply(volume) " );
-
   if (!findBoundaryPoints()     || // bind ID to points
       !setShapeToMesh( theBlock )) // check theBlock is a suitable shape
     return false;
@@ -3384,8 +3412,6 @@ bool SMESH_Pattern::Apply (const SMDS_MeshVolume* theVolume,
                            const int              theNode000Index,
                            const int              theNode001Index)
 {
-  //MESSAGE(" ::Apply(MeshVolume) " );
-
   if (!findBoundaryPoints()) // bind ID to points
     return false;
 
@@ -3442,7 +3468,7 @@ void SMESH_Pattern::mergePoints (const bool uniteGroups)
       Bnd_Box box;
       TNodeSet::const_iterator n = nodes.begin();
       for ( ; n != nodes.end(); ++n )
-        box.Add( gp_Pnt( (*n)->X(), (*n)->Y(), (*n)->Z() ));
+        box.Add( gp_Pnt( SMESH_TNodeXYZ( *n )));
       double x, y, z, X, Y, Z;
       box.Get( x, y, z, X, Y, Z );
       gp_Pnt p( x, y, z ), P( X, Y, Z );
@@ -3453,7 +3479,7 @@ void SMESH_Pattern::mergePoints (const bool uniteGroups)
     bool unite = ( uniteGroups && nodes.size() == 2 );
     map< double, int > distIndMap;
     const SMDS_MeshNode* node = *nodes.begin();
-    gp_Pnt P( node->X(), node->Y(), node->Z() );
+    gp_Pnt P = SMESH_TNodeXYZ( node );
 
     // compare points, replace indices
 
@@ -3526,13 +3552,7 @@ void SMESH_Pattern::
   myPolyElems.reserve( myIdsOnBoundary.size() );
 
   // make a set of refined elements
-  TIDSortedElemSet avoidSet, elemSet;
-  std::vector<const SMDS_MeshElement*>::iterator itv =  myElements.begin();
-  for(; itv!=myElements.end(); itv++) {
-    const SMDS_MeshElement* el = (*itv);
-    avoidSet.insert( el );
-  }
-  //avoidSet.insert( myElements.begin(), myElements.end() );
+  TIDSortedElemSet elemSet, avoidSet( myElements.begin(), myElements.end() );
 
   map< TNodeSet, list< list< int > > >::iterator indListIt, nn_IdList;
 
@@ -3559,7 +3579,7 @@ void SMESH_Pattern::
       while (true)
       {
         const SMDS_MeshElement* face =
-          SMESH_MeshEditor::FindFaceInSet( n1, n2, elemSet, avoidSet );
+          SMESH_MeshAlgos::FindFaceInSet( n1, n2, elemSet, avoidSet );
         if ( face )
         {
           avoidSet.insert ( face );
@@ -3886,19 +3906,102 @@ void SMESH_Pattern::clearMesh(SMESH_Mesh* theMesh) const
 }
 
 //=======================================================================
+//function : findExistingNodes
+//purpose  : fills nodes vector with nodes existing on a given shape (IMP 22368)
+//           Returns true if all nodes for all points on S are found
+//=======================================================================
+
+bool SMESH_Pattern::findExistingNodes( SMESH_Mesh*                      mesh,
+                                       const TopoDS_Shape&              S,
+                                       const std::list< TPoint* > &     points,
+                                       vector< const SMDS_MeshNode* > & nodesVector)
+{
+  if ( S.IsNull() || points.empty() )
+    return false;
+
+  SMESHDS_Mesh* aMeshDS = mesh->GetMeshDS();
+
+  switch ( S.ShapeType() )
+  {
+  case TopAbs_VERTEX:
+  {
+    int pIndex = points.back() - &myPoints[0];
+    if ( !nodesVector[ pIndex ] )
+      nodesVector[ pIndex ] = SMESH_Algo::VertexNode( TopoDS::Vertex( S ), aMeshDS );
+    return nodesVector[ pIndex ];
+  }
+  case TopAbs_EDGE:
+  {
+    const TopoDS_Edge& edge = TopoDS::Edge( S );
+    map< double, const SMDS_MeshNode* > paramsOfNodes;
+    if ( !SMESH_Algo::GetSortedNodesOnEdge( aMeshDS, edge,
+                                            /*ignoreMediumNodes=*/false,
+                                            paramsOfNodes )
+         || paramsOfNodes.size() < 3 )
+      break;
+    // points on VERTEXes are included with wrong myU
+    list< TPoint* >::const_reverse_iterator pItR = ++points.rbegin();
+    list< TPoint* >::const_iterator         pItF = ++points.begin();
+    const bool isForward = ( (*pItF)->myU < (*pItR)->myU );
+    map< double, const SMDS_MeshNode* >::iterator u2n    = ++paramsOfNodes.begin();
+    map< double, const SMDS_MeshNode* >::iterator u2nEnd = --paramsOfNodes.end();
+    TPoint* p;
+    if ( paramsOfNodes.size() == points.size() )
+    {
+      for ( ; u2n != u2nEnd; ++u2n )
+      {
+        p = ( isForward ? *pItF : *pItR );
+        int pIndex = p - &myPoints[0];
+        if ( !nodesVector [ pIndex ] )
+          nodesVector [ pIndex ] = u2n->second;
+        ++pItF;
+        ++pItR;
+      }
+      return true;
+    }
+    else
+    {
+      const double tolFact = 0.05;
+      while ( u2n != u2nEnd && pItF != points.end() )
+      {
+        const double         u = u2n->first;
+        const SMDS_MeshNode* n = u2n->second;
+        const double       tol = ( (++u2n)->first - u ) * tolFact;
+        do
+        {
+          p = ( isForward ? *pItF : *pItR );
+          if ( Abs( u - p->myU ) < tol )
+          {
+            int pIndex = p - &myPoints[0];
+            if ( !nodesVector [ pIndex ] )
+              nodesVector [ pIndex ] = n;
+            ++pItF;
+            ++pItR;
+            break;
+          }
+        }
+        while ( p->myU < u && ( ++pItF, ++pItR != points.rend() ));
+      }
+    }
+    break;
+  } // case TopAbs_EDGE:
+
+  default:;
+  } // switch ( S.ShapeType() )
+
+  return false;
+}
+
+//=======================================================================
 //function : MakeMesh
 //purpose  : Create nodes and elements in <theMesh> using nodes
 //           coordinates computed by either of Apply...() methods
-// WARNING : StdMeshers_Projection_... relies on MakeMesh() behavior: that
-//           it does not care of nodes and elements already existing on
-//           sub-shapes. DO NOT MERGE them or modify also StdMeshers_Projection_..
 //=======================================================================
 
 bool SMESH_Pattern::MakeMesh(SMESH_Mesh* theMesh,
                              const bool  toCreatePolygons,
                              const bool  toCreatePolyedrs)
 {
-  MESSAGE(" ::MakeMesh() " );
   if ( !myIsComputed )
     return setErrorCode( ERR_MAKEM_NOT_COMPUTED );
 
@@ -3921,38 +4024,89 @@ bool SMESH_Pattern::MakeMesh(SMESH_Mesh* theMesh,
     for ( ; i_node != myXYZIdToNodeMap.end(); i_node++ ) {
       nodesVector[ i_node->first ] = i_node->second;
     }
-    for ( int i = 0; i < myXYZ.size(); ++i ) {
+    for ( size_t i = 0; i < myXYZ.size(); ++i ) {
       if ( !nodesVector[ i ] && isDefined( myXYZ[ i ] ) )
         nodesVector[ i ] = aMeshDS->AddNode (myXYZ[ i ].X(),
                                              myXYZ[ i ].Y(),
                                              myXYZ[ i ].Z());
     }
-  }
+    if ( theMesh->HasShapeToMesh() )
+    {
+      // set nodes on EDGEs (IMP 22368)
+      SMESH_MesherHelper helper( *theMesh );
+      helper.ToFixNodeParameters( true );
+      map< TNodeSet, list< list< int > > >::iterator idListIt = myIdsOnBoundary.begin();
+      for ( ; idListIt != myIdsOnBoundary.end(); idListIt++ )
+      {
+        list<list< int > >& groups = idListIt->second;
+        const TNodeSet&      nodes = idListIt->first;
+        if ( nodes.size() != 2 )
+          continue; // not a link
+        const SMDS_MeshNode* n1 = *nodes.begin();
+        const SMDS_MeshNode* n2 = *nodes.rbegin();
+        TopoDS_Shape S1 = helper.GetSubShapeByNode( n1, aMeshDS );
+        TopoDS_Shape S2 = helper.GetSubShapeByNode( n2, aMeshDS );
+        if ( S1.IsNull() || S1.ShapeType() < TopAbs_EDGE ||
+             S2.IsNull() || S2.ShapeType() < TopAbs_EDGE )
+          continue;
+        TopoDS_Shape S;
+        if ( S1.ShapeType() == TopAbs_EDGE )
+        {
+          if ( S1 == S2 || helper.IsSubShape( S2, S1 ))
+            S = S1;
+        }
+        else if ( S2.ShapeType() == TopAbs_EDGE )
+        {
+          if ( helper.IsSubShape( S1, S2 ))
+            S = S2;
+        }
+        else
+        {
+          S = helper.GetCommonAncestor( S1, S2, *theMesh, TopAbs_EDGE );
+        } 
+        if ( S.IsNull() )
+          continue;
+        const TopoDS_Edge & E = TopoDS::Edge( S );
+        helper.SetSubShape( E );
+        list<list< int > >::iterator g = groups.begin();
+        for ( ; g != groups.end(); ++g )
+        {
+          list< int >& ids = *g;
+          list< int >::iterator id = ids.begin();
+          for ( ; id != ids.end(); ++id )
+            if ( nodesVector[ *id ] && nodesVector[ *id ]->getshapeId() < 1 )
+            {
+              double u = 1e100;
+              aMeshDS->SetNodeOnEdge( nodesVector[ *id ], E, u );
+              helper.CheckNodeU( E, nodesVector[ *id ], u, 1e-7, true );
+            }
+        }
+      }
+    }
+  }  // if ( onMeshElements )
+
   else
   {
     nodesVector.resize( myPoints.size(), 0 );
-
-    // to find point index
-    map< TPoint*, int > pointIndex;
-    for ( int i = 0; i < myPoints.size(); i++ )
-      pointIndex.insert( make_pair( & myPoints[ i ], i ));
 
     // loop on sub-shapes of myShape: create nodes
     map< int, list< TPoint* > >::iterator idPointIt = myShapeIDToPointsMap.begin();
     for ( ; idPointIt != myShapeIDToPointsMap.end(); idPointIt++ )
     {
-      TopoDS_Shape S;
-      //SMESHDS_SubMesh * subMeshDS = 0;
-      if ( !myShapeIDMap.IsEmpty() ) {
-        S = myShapeIDMap( idPointIt->first );
-        //subMeshDS = aMeshDS->MeshElements( S );
-      }
       list< TPoint* > & points = idPointIt->second;
+      TopoDS_Shape S;
+      if ( !myShapeIDMap.IsEmpty() )
+        S = myShapeIDMap( idPointIt->first );
+
+      // find existing nodes on EDGEs and VERTEXes
+      if ( findExistingNodes( theMesh, S, points, nodesVector ))
+        continue;
+
       list< TPoint* >::iterator pIt = points.begin();
       for ( ; pIt != points.end(); pIt++ )
       {
         TPoint* point = *pIt;
-        int pIndex = pointIndex[ point ];
+        int pIndex = point - &myPoints[0];
         if ( nodesVector [ pIndex ] )
           continue;
         SMDS_MeshNode* node = aMeshDS->AddNode (point->myXYZ.X(),
@@ -3960,8 +4114,8 @@ bool SMESH_Pattern::MakeMesh(SMESH_Mesh* theMesh,
                                                 point->myXYZ.Z());
         nodesVector [ pIndex ] = node;
 
-        if ( !S.IsNull() /*subMeshDS*/ ) {
-          // !!!!! do not merge new nodes with ones existing on submeshes (see method comment)
+        if ( !S.IsNull() ) {
+
           switch ( S.ShapeType() ) {
           case TopAbs_VERTEX: {
             aMeshDS->SetNodeOnVertex( node, TopoDS::Vertex( S )); break;
@@ -3999,6 +4153,9 @@ bool SMESH_Pattern::MakeMesh(SMESH_Mesh* theMesh,
   }
 
   aMeshDS->compactMesh();
+
+  if ( myToKeepNodes )
+    myOutNodes.swap( nodesVector );
 
 //   const map<int,SMESHDS_SubMesh*>& sm = aMeshDS->SubMeshes();
 //   map<int,SMESHDS_SubMesh*>::const_iterator i_sm = sm.begin();
@@ -4040,7 +4197,7 @@ void SMESH_Pattern::createElements(SMESH_Mesh*                            theMes
     groups.resize( theElements.size() );
     const set<SMESHDS_GroupBase*>& allGroups = aMeshDS->GetGroups();
     set<SMESHDS_GroupBase*>::const_iterator grIt;
-    for ( int i = 0; i < theElements.size(); i++ )
+    for ( size_t i = 0; i < theElements.size(); i++ )
     {
       shapeIDs[ i ] = editor.FindShape( theElements[ i ] );
       for ( grIt = allGroups.begin(); grIt != allGroups.end(); grIt++ ) {
@@ -4082,7 +4239,7 @@ void SMESH_Pattern::createElements(SMESH_Mesh*                            theMes
     TElemDef::const_iterator id = elemNodeInd.begin();
     int nbNodes;
     for ( nbNodes = 0; id != elemNodeInd.end(); id++ ) {
-      if ( *id < theNodesVector.size() )
+      if ( *id < (int) theNodesVector.size() )
         nodes[ nbNodes++ ] = theNodesVector[ *id ];
       else
         nodes[ nbNodes++ ] = myXYZIdToNodeMap[ *id ];
@@ -4147,8 +4304,9 @@ void SMESH_Pattern::createElements(SMESH_Mesh*                            theMes
         SMDS_ElemIteratorPtr noIt = elem->nodesIterator();
         while ( noIt->more() ) {
           SMDS_MeshNode* node = const_cast<SMDS_MeshNode*>(smdsNode( noIt->next() ));
-          if (!node->getshapeId() &&
-              shellNodes.find( node ) == shellNodes.end() ) {
+          if ( node->getshapeId() < 1 &&
+               shellNodes.find( node ) == shellNodes.end() )
+          {
             if ( S.ShapeType() == TopAbs_FACE )
               aMeshDS->SetNodeOnFace( node, shapeID,
                                       Precision::Infinite(),// <- it's a sign that UV is not set
@@ -4180,7 +4338,7 @@ void SMESH_Pattern::createElements(SMESH_Mesh*                            theMes
   }
   if ( onMeshElements ) {
     list< int > elemIDs;
-    for ( int i = 0; i < theElements.size(); i++ )
+    for ( size_t i = 0; i < theElements.size(); i++ )
     {
       subMesh = theMesh->GetSubMeshContaining( shapeIDs[ i ] );
       if ( subMesh )
@@ -4209,7 +4367,7 @@ bool SMESH_Pattern::isReversed(const SMDS_MeshNode* theFirstNode,
   gp_Pnt P[2];
   list<int>::const_iterator id = theIdsList.begin();
   for ( int i = 0; i < 2; ++i, ++id ) {
-    if ( *id < myXYZ.size() )
+    if ( *id < (int) myXYZ.size() )
       P[ i ] = myXYZ[ *id ];
     else {
       map< int, const SMDS_MeshNode*>::const_iterator i_n;
@@ -4284,7 +4442,7 @@ void SMESH_Pattern::arrangeBoundaries (list< list< TPoint* > >& boundaryList)
     }
 
     if ( outerBndPos != boundaryList.begin() )
-      boundaryList.splice( boundaryList.begin(), boundaryList, outerBndPos, ++outerBndPos );
+      boundaryList.splice( boundaryList.begin(), boundaryList, outerBndPos );
 
   } // if nbBoundaries > 1
 
@@ -4378,8 +4536,6 @@ void SMESH_Pattern::arrangeBoundaries (list< list< TPoint* > >& boundaryList)
 bool SMESH_Pattern::findBoundaryPoints()
 {
   if ( myIsBoundaryPointsFound ) return true;
-
-  MESSAGE(" findBoundaryPoints() ");
 
   myNbKeyPntInBoundary.clear();
 
@@ -4622,7 +4778,7 @@ bool SMESH_Pattern::setShapeToMesh(const TopoDS_Shape& theShape)
   TopAbs_ShapeEnum aType = theShape.ShapeType();
   bool dimOk = ( myIs2D ? aType == TopAbs_FACE : aType == TopAbs_SHELL );
   if ( !dimOk ) {
-    MESSAGE( "Pattern dimention mismatch" );
+    MESSAGE( "Pattern dimension mismatch" );
     return setErrorCode( ERR_APPL_BAD_DIMENTION );
   }
 
@@ -4632,7 +4788,7 @@ bool SMESH_Pattern::setShapeToMesh(const TopoDS_Shape& theShape)
     TopTools_MapOfShape seamVertices;
     TopoDS_Face face = TopoDS::Face( theShape );
     TopExp_Explorer eExp( theShape, TopAbs_EDGE );
-    for ( ; eExp.More() && nbNodeOnSeamEdge == 0; eExp.Next() ) {
+    for ( ; eExp.More() /*&& nbNodeOnSeamEdge == 0*/; eExp.Next() ) {
       const TopoDS_Edge& ee = TopoDS::Edge(eExp.Current());
       if ( BRep_Tool::IsClosed(ee, face) ) {
         // seam edge and vertices encounter twice in theFace
@@ -4645,7 +4801,7 @@ bool SMESH_Pattern::setShapeToMesh(const TopoDS_Shape& theShape)
   // check nb of vertices
   TopTools_IndexedMapOfShape vMap;
   TopExp::MapShapes( theShape, TopAbs_VERTEX, vMap );
-  if ( vMap.Extent() + nbNodeOnSeamEdge != myKeyPointIDs.size() ) {
+  if ( vMap.Extent() + nbNodeOnSeamEdge != (int)myKeyPointIDs.size() ) {
     MESSAGE( myKeyPointIDs.size() + nbNodeOnSeamEdge << " != " << vMap.Extent() );
     return setErrorCode( ERR_APPL_BAD_NB_VERTICES );
   }

@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -54,24 +54,24 @@ const SMDS_MeshElement * SMDS_IteratorOfElements::subNext()
 /// Create an iterator which look for elements of type type which are linked 
 /// to the element element. it is the iterator to get connectivity of element
 //////////////////////////////////////////////////////////////////////////////
-SMDS_IteratorOfElements::SMDS_IteratorOfElements(const SMDS_MeshElement * element,
-                                                 SMDSAbs_ElementType type,
+SMDS_IteratorOfElements::SMDS_IteratorOfElements(const SMDS_MeshElement *    element,
+                                                 SMDSAbs_ElementType         type,
                                                  const SMDS_ElemIteratorPtr& it)
-     : t1Iterator(it),
-       t2Iterator(SMDS_ElemIteratorPtr((SMDS_ElemIterator*)NULL)),
-       myType(type), myElement(element),
-       myProxyElement(NULL)
+  : t1Iterator(it),
+    t2Iterator(SMDS_ElemIteratorPtr((SMDS_ElemIterator*)NULL)),
+    myType(type), myElement(element),
+    myProxyElement(NULL)
 {
-        while(subMore())
-                alreadyReturnedElements.insert(subNext());
-        itAlreadyReturned= alreadyReturnedElements.begin();
-        switch(myElement->GetType())
-        {
-        case SMDSAbs_Node: 
-        case SMDSAbs_Edge: myReverseIteration=true; break;
-        case SMDSAbs_Face: myReverseIteration=(type==SMDSAbs_Volume); break;
-        default: myReverseIteration=false;
-        }       
+  while(subMore())
+    alreadyReturnedElements.insert(subNext());
+  itAlreadyReturned= alreadyReturnedElements.begin();
+  switch(myElement->GetType())
+  {
+  case SMDSAbs_Node:
+  case SMDSAbs_Edge: myReverseIteration=true; break;
+  case SMDSAbs_Face: myReverseIteration=(type==SMDSAbs_Volume); break;
+  default: myReverseIteration=false;
+  }
 }
 
 bool SMDS_IteratorOfElements::more()

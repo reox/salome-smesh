@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -28,10 +28,11 @@
 //
 #include "StdMeshers_NumberOfSegments.hxx"
 
-#include "StdMeshers_Distribution.hxx"
+#include "SMESHDS_Mesh.hxx"
 #include "SMESHDS_SubMesh.hxx"
-#include "SMESH_Mesh.hxx"
 #include "SMESH_Comment.hxx"
+#include "SMESH_Mesh.hxx"
+#include "StdMeshers_Distribution.hxx"
 
 #include <ExprIntrp_GenExp.hxx>
 #include <Expr_Array1OfNamedUnknown.hxx>
@@ -53,6 +54,7 @@
 
 #include <Basics_Utils.hxx>
 
+using namespace StdMeshers;
 using namespace std;
 
 const double PRECISION = 1e-7;
@@ -179,15 +181,17 @@ StdMeshers_NumberOfSegments::DistrType StdMeshers_NumberOfSegments::GetDistrType
 void StdMeshers_NumberOfSegments::SetScaleFactor(double scaleFactor)
   throw(SALOME_Exception)
 {
-  if (_distrType != DT_Scale)
-    _distrType = DT_Scale;
-    //throw SALOME_Exception(LOCALIZED("not a scale distribution"));
   if (scaleFactor < PRECISION)
     throw SALOME_Exception(LOCALIZED("scale factor must be positive"));
-  //if (fabs(scaleFactor - 1.0) < PRECISION)
-  //  throw SALOME_Exception(LOCALIZED("scale factor must not be equal to 1"));
 
-  if (fabs(_scaleFactor - scaleFactor) > PRECISION)
+  if (_distrType != DT_Scale)
+    _distrType = DT_Scale;
+
+//  commented by mpa for IPAL 52986
+//  if ( fabs(scaleFactor - 1.0) < PRECISION )
+//    _distrType = DT_Regular;
+
+  if ( fabs(_scaleFactor - scaleFactor) > PRECISION )
   {
     _scaleFactor = scaleFactor;
     NotifySubMeshesHypothesisModification();
@@ -196,7 +200,7 @@ void StdMeshers_NumberOfSegments::SetScaleFactor(double scaleFactor)
 
 //================================================================================
 /*!
- * 
+ *
  */
 //================================================================================
 
@@ -210,7 +214,7 @@ double StdMeshers_NumberOfSegments::GetScaleFactor() const
 
 //================================================================================
 /*!
- * 
+ *
  */
 //================================================================================
 
@@ -223,12 +227,12 @@ void StdMeshers_NumberOfSegments::SetTableFunction(const vector<double>& table)
   if ( (table.size() % 2) != 0 )
     throw SALOME_Exception(LOCALIZED("odd size of vector of table function"));
 
-  int i;
   double prev = -PRECISION;
   bool isSame = table.size() == _table.size();
 
   bool pos = false;
-  for (i=0; i < table.size()/2; i++) {
+  for ( size_t i = 0; i < table.size() / 2; i++ )
+  {
     double par = table[i*2];
     double val = table[i*2+1];
     if( _convMode==0 )
@@ -238,8 +242,9 @@ void StdMeshers_NumberOfSegments::SetTableFunction(const vector<double>& table)
         OCC_CATCH_SIGNALS;
 #endif
         val = pow( 10.0, val );
-      } catch(Standard_Failure) {
-        Handle(Standard_Failure) aFail = Standard_Failure::Caught();
+      }
+      catch(Standard_Failure) {
+        // Handle(Standard_Failure) aFail = Standard_Failure::Caught();
         throw SALOME_Exception( LOCALIZED( "invalid value"));
         return;
       }
@@ -247,19 +252,19 @@ void StdMeshers_NumberOfSegments::SetTableFunction(const vector<double>& table)
     else if( _convMode==1 && val<0.0 )
       val = 0.0;
 
-    if ( par<0 || par > 1)
+    if ( par < 0 || par > 1)
       throw SALOME_Exception(LOCALIZED("parameter of table function is out of range [0,1]"));
-    if ( fabs(par-prev)<PRECISION )
+    if ( fabs(par-prev) < PRECISION )
       throw SALOME_Exception(LOCALIZED("two parameters are the same"));
     if ( val < 0 )
       throw SALOME_Exception(LOCALIZED("value of table function is not positive"));
-    if( val>PRECISION )
+    if( val > PRECISION )
       pos = true;
     if (isSame)
     {
       double oldpar = _table[i*2];
       double oldval = _table[i*2+1];
-      if (fabs(par - oldpar) > PRECISION || fabs(val - oldval) > PRECISION)
+      if ( fabs(par - oldpar) > PRECISION || fabs(val - oldval) > PRECISION )
         isSame = false;
     }
     prev = par;
@@ -268,7 +273,7 @@ void StdMeshers_NumberOfSegments::SetTableFunction(const vector<double>& table)
   if( !pos )
     throw SALOME_Exception(LOCALIZED("value of table function is not positive"));
 
-  if( pos && !isSame )
+  if ( pos && !isSame )
   {
     _table = table;
     NotifySubMeshesHypothesisModification();
@@ -277,7 +282,7 @@ void StdMeshers_NumberOfSegments::SetTableFunction(const vector<double>& table)
 
 //================================================================================
 /*!
- * 
+ *
  */
 //================================================================================
 
@@ -336,7 +341,7 @@ bool process( const TCollection_AsciiString& str, int convMode,
     myExpr = ExprIntrp_GenExp::Create();
     myExpr->Process( str.ToCString() );
   } catch(Standard_Failure) {
-    Handle(Standard_Failure) aFail = Standard_Failure::Caught();
+    // Handle(Standard_Failure) aFail = Standard_Failure::Caught();
     parsed_ok = false;
   }
 
@@ -393,7 +398,6 @@ void StdMeshers_NumberOfSegments::SetExpressionFunction(const char* expr)
 {
   if (_distrType != DT_ExprFunc)
     _distrType = DT_ExprFunc;
-    //throw SALOME_Exception(LOCALIZED("not an expression function distribution"));
 
   string func = CheckExpressionFunction( expr, _convMode );
   if( _func != func )
@@ -508,9 +512,8 @@ ostream & StdMeshers_NumberOfSegments::SaveTo(ostream & save)
     save << " " << _scaleFactor;
     break;
   case DT_TabFunc:
-    int i;
     save << " " << _table.size();
-    for (i=0; i < _table.size(); i++)
+    for ( size_t i = 0; i < _table.size(); i++ )
       save << " " << _table[i];
     break;
   case DT_ExprFunc:
@@ -546,7 +549,7 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
   int a;
 
   // read number of segments
-  isOK = (load >> a);
+  isOK = static_cast<bool>(load >> a);
   if (isOK)
     _numberOfSegments = a;
   else
@@ -559,7 +562,7 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
   //    (nb.segments, distr.type, some other params.),
   //    we wait here the ditribution type, which is integer
   double scale_factor;
-  isOK = (load >> scale_factor);
+  isOK = static_cast<bool>(load >> scale_factor);
   a = (int)scale_factor;
 
   // try to interprete ditribution type,
@@ -580,7 +583,7 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
   {
   case DT_Scale:
     {
-      isOK = (load >> b);
+      isOK = static_cast<bool>(load >> b);
       if (isOK)
         _scaleFactor = b;
       else
@@ -594,14 +597,13 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
     break;
   case DT_TabFunc:
     {
-      isOK = (load >> a);
+      isOK = static_cast<bool>(load >> a);
       if (isOK)
       {
         _table.resize(a, 0.);
-        int i;
-        for (i=0; i < _table.size(); i++)
+        for ( size_t i=0; i < _table.size(); i++ )
         {
-          isOK = (load >> b);
+          isOK = static_cast<bool>(load >> b);
           if (isOK)
             _table[i] = b;
           else
@@ -620,7 +622,7 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
   case DT_ExprFunc:
     {
       string str;
-      isOK = (load >> str);
+      isOK = static_cast<bool>(load >> str);
       if (isOK)
         _func = str;
       else
@@ -639,7 +641,7 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
 
   if (_distrType == DT_TabFunc || _distrType == DT_ExprFunc)
   {
-    isOK = (load >> a);
+    isOK = static_cast<bool>(load >> a);
     if (isOK)
       _convMode = a;
     else
@@ -648,14 +650,14 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
 
   // load reversed edges IDs
   int intVal;
-  isOK = (load >> intVal);
+  isOK = static_cast<bool>(load >> intVal);
   if ( isOK && _distrType != DT_Regular && intVal > 0 ) {
     _edgeIDs.reserve( intVal );
-    for (int i = 0; i < _edgeIDs.capacity() && isOK; i++) {
-      isOK = (load >> intVal);
+    for ( size_t i = 0; i < _edgeIDs.capacity() && isOK; i++) {
+      isOK = static_cast<bool>(load >> intVal);
       if ( isOK ) _edgeIDs.push_back( intVal );
     }
-    isOK = (load >> _objEntry);
+    isOK = static_cast<bool>(load >> _objEntry);
   }
 
   return load;
@@ -663,7 +665,7 @@ istream & StdMeshers_NumberOfSegments::LoadFrom(istream & load)
 
 //=============================================================================
 /*!
- *  
+ *
  */
 //=============================================================================
 

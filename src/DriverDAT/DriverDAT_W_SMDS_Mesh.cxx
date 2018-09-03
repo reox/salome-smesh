@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -38,11 +38,11 @@ Driver_Mesh::Status DriverDAT_W_SMDS_Mesh::Perform()
   Status aResult = DRS_OK;
 
   int nbNodes, nbCells;
-  //int i;
-  
+
   char *file2Read = (char *)myFile.c_str();
   FILE* aFileId = fopen(file2Read, "w+");
-  if (aFileId < 0) {
+  if ( !aFileId )
+  {
     fprintf(stderr, ">> ERREUR : ouverture du fichier %s \n", file2Read);
     return DRS_FAIL;
   }
@@ -50,15 +50,12 @@ Driver_Mesh::Status DriverDAT_W_SMDS_Mesh::Perform()
   /****************************************************************************
    *                       NOMBRES D'OBJETS                                    *
    ****************************************************************************/
-  fprintf(stdout, "\n(****************************)\n");
-  fprintf(stdout, "(* INFORMATIONS GENERALES : *)\n");
-  fprintf(stdout, "(****************************)\n");
-  
+
   /* Combien de noeuds ? */
   nbNodes = myMesh->NbNodes();
-  
+
   /* Combien de mailles, faces ou aretes ? */
-  int /*nb_of_nodes,*/ nb_of_edges, nb_of_faces, nb_of_volumes;
+  int nb_of_edges, nb_of_faces, nb_of_volumes;
   nb_of_edges = myMesh->NbEdges();
   nb_of_faces = myMesh->NbFaces();
   nb_of_volumes = myMesh->NbVolumes();
@@ -66,35 +63,32 @@ Driver_Mesh::Status DriverDAT_W_SMDS_Mesh::Perform()
   SCRUTE(nb_of_edges);
   SCRUTE(nb_of_faces);
   SCRUTE(nb_of_volumes);
-  
-  fprintf(stdout, "%d %d\n", nbNodes, nbCells);
+
+  //fprintf(stdout, "%d %d\n", nbNodes, nbCells);
   fprintf(aFileId, "%d %d\n", nbNodes, nbCells);
-  
+
   /****************************************************************************
    *                       ECRITURE DES NOEUDS                                 *
    ****************************************************************************/
-  fprintf(stdout, "\n(************************)\n");
-  fprintf(stdout, "(* NOEUDS DU MAILLAGE : *)\n");
-  fprintf(stdout, "(************************)\n");
-  
+
   SMDS_NodeIteratorPtr itNodes=myMesh->nodesIterator();
-  while(itNodes->more()){               
+  while(itNodes->more())
+  {
     const SMDS_MeshNode * node = itNodes->next();
-    fprintf(aFileId, "%d %e %e %e\n", node->GetID(), node->X(), node->Y(), node->Z());
+    fprintf(aFileId, "%d %.14e %.14e %.14e\n", node->GetID(), node->X(), node->Y(), node->Z());
   }
-        
+
   /****************************************************************************
    *                       ECRITURE DES ELEMENTS                                *
    ****************************************************************************/
-  fprintf(stdout, "\n(**************************)\n");
-  fprintf(stdout, "(* ELEMENTS DU MAILLAGE : *)\n");
-  fprintf(stdout, "(**************************)");
   /* Ecriture des connectivites, noms, numeros des mailles */
-  
+
   SMDS_EdgeIteratorPtr itEdges=myMesh->edgesIterator();
-  while(itEdges->more()){
+  while(itEdges->more())
+  {
     const SMDS_MeshElement * elem = itEdges->next();
-    switch (elem->NbNodes()) {
+    switch (elem->NbNodes())
+    {
     case 2:
       fprintf(aFileId, "%d %d ", elem->GetID(), 102);
       break;
@@ -103,42 +97,51 @@ Driver_Mesh::Status DriverDAT_W_SMDS_Mesh::Perform()
       break;
     }
     SMDS_ElemIteratorPtr it=elem->nodesIterator();
-    while(it->more()) 
+    while(it->more())
       fprintf(aFileId, "%d ", it->next()->GetID());
     fprintf(aFileId, "\n");
   }
-  
+
   SMDS_FaceIteratorPtr itFaces=myMesh->facesIterator();
-  while(itFaces->more()){
+  while(itFaces->more())
+  {
     const SMDS_MeshElement * elem = itFaces->next();
-    switch (elem->NbNodes()) {
-    case 3:
-      fprintf(aFileId, "%d %d ", elem->GetID(), 203);
-      break;
-    case 4:
-      fprintf(aFileId, "%d %d ", elem->GetID(), 204);
-      break;
-    case 6:
-      fprintf(aFileId, "%d %d ", elem->GetID(), 206);
-      break;
-    }
+    if ( elem->IsPoly() )
+      fprintf(aFileId, "%d %d ", elem->GetID(), 400+elem->NbNodes());
+    else
+      fprintf(aFileId, "%d %d ", elem->GetID(), 200+elem->NbNodes());
     SMDS_ElemIteratorPtr it=elem->nodesIterator();
-    while(it->more()) 
+    while(it->more())
       fprintf(aFileId, "%d ", it->next()->GetID());
     fprintf(aFileId, "\n");
   }
 
   SMDS_VolumeIteratorPtr itVolumes=myMesh->volumesIterator();
-  while(itVolumes->more()){
+  const SMDS_VtkVolume* v;
+  while(itVolumes->more())
+  {
     const SMDS_MeshElement * elem = itVolumes->next();
-    switch (elem->NbNodes()) {
-    case 8:
-      fprintf(aFileId, "%d %d ", elem->GetID(), 308);
-      break;
-    }
+    if ( elem->IsPoly() )
+    {
+      fprintf(aFileId, "%d %d ", elem->GetID(), 500+elem->NbNodes());
 
+      if (( v = dynamic_cast< const SMDS_VtkVolume*>( elem )))
+      {
+        std::vector<int> quant = v->GetQuantities();
+        if ( !quant.empty() )
+        {
+          fprintf(aFileId, "%d %d ", (int)quant.size(), quant[0]);
+          for ( size_t i = 1; i < quant.size(); ++i )
+            fprintf(aFileId, "%d ", quant[i]);
+        }
+      }
+    }
+    else
+    {
+      fprintf(aFileId, "%d %d ", elem->GetID(), 300+elem->NbNodes());
+    }
     SMDS_ElemIteratorPtr it=elem->nodesIterator();
-    while(it->more()) 
+    while(it->more())
       fprintf(aFileId, "%d ", it->next()->GetID());
 
     fprintf(aFileId, "\n");

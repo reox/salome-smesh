@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,18 +20,29 @@
 // See http://www.salome-platform.org/ or email : webmaster.salome@opencascade.com
 //
 
-//  SMESH SMESH : implementaion of SMESH idl descriptions
 //  File   : StdMeshers_Regular_1D.cxx
 //           Moved here from SMESH_Regular_1D.cxx
 //  Author : Paul RASCLE, EDF
 //  Module : SMESH
 //
 #include "StdMeshers_Regular_1D.hxx"
-#include "StdMeshers_Distribution.hxx"
 
+#include "SMDS_MeshElement.hxx"
+#include "SMDS_MeshNode.hxx"
+#include "SMESHDS_Mesh.hxx"
+#include "SMESH_Comment.hxx"
+#include "SMESH_Gen.hxx"
+#include "SMESH_HypoFilter.hxx"
+#include "SMESH_Mesh.hxx"
+#include "SMESH_subMesh.hxx"
+#include "SMESH_subMeshEventListener.hxx"
+#include "StdMeshers_Adaptive1D.hxx"
 #include "StdMeshers_Arithmetic1D.hxx"
 #include "StdMeshers_AutomaticLength.hxx"
+#include "StdMeshers_Geometric1D.hxx"
 #include "StdMeshers_Deflection1D.hxx"
+#include "StdMeshers_Distribution.hxx"
+#include "StdMeshers_FixedPoints1D.hxx"
 #include "StdMeshers_LocalLength.hxx"
 #include "StdMeshers_MaxLength.hxx"
 #include "StdMeshers_NumberOfSegments.hxx"
@@ -39,18 +50,8 @@
 #include "StdMeshers_SegmentLengthAroundVertex.hxx"
 #include "StdMeshers_StartEndLength.hxx"
 
-#include "SMESH_Gen.hxx"
-#include "SMESH_Mesh.hxx"
-#include "SMESH_HypoFilter.hxx"
-#include "SMESH_subMesh.hxx"
-#include "SMESH_subMeshEventListener.hxx"
-#include "SMESH_Comment.hxx"
-
-#include "SMDS_MeshElement.hxx"
-#include "SMDS_MeshNode.hxx"
-
-#include "Utils_SALOME_Exception.hxx"
-#include "utilities.h"
+#include <Utils_SALOME_Exception.hxx>
+#include <utilities.h>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRep_Tool.hxx>
@@ -62,42 +63,48 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Vertex.hxx>
 
 #include <string>
 #include <limits>
 
 using namespace std;
+using namespace StdMeshers;
 
 //=============================================================================
 /*!
- *  
+ *
  */
 //=============================================================================
 
-StdMeshers_Regular_1D::StdMeshers_Regular_1D(int hypId, int studyId,
-        SMESH_Gen * gen):SMESH_1D_Algo(hypId, studyId, gen)
+StdMeshers_Regular_1D::StdMeshers_Regular_1D(int         hypId,
+                                             int         studyId,
+                                             SMESH_Gen * gen)
+  :SMESH_1D_Algo( hypId, studyId, gen )
 {
-        MESSAGE("StdMeshers_Regular_1D::StdMeshers_Regular_1D");
-        _name = "Regular_1D";
-        _shapeType = (1 << TopAbs_EDGE);
-        _fpHyp = 0;
+  _name = "Regular_1D";
+  _shapeType = (1 << TopAbs_EDGE);
+  _fpHyp = 0;
 
-        _compatibleHypothesis.push_back("LocalLength");
-        _compatibleHypothesis.push_back("MaxLength");
-        _compatibleHypothesis.push_back("NumberOfSegments");
-        _compatibleHypothesis.push_back("StartEndLength");
-        _compatibleHypothesis.push_back("Deflection1D");
-        _compatibleHypothesis.push_back("Arithmetic1D");
-        _compatibleHypothesis.push_back("FixedPoints1D");
-        _compatibleHypothesis.push_back("AutomaticLength");
-
-        _compatibleHypothesis.push_back("QuadraticMesh"); // auxiliary !!!
-        _compatibleHypothesis.push_back("Propagation"); // auxiliary !!!
+  _compatibleHypothesis.push_back("LocalLength");
+  _compatibleHypothesis.push_back("MaxLength");
+  _compatibleHypothesis.push_back("NumberOfSegments");
+  _compatibleHypothesis.push_back("StartEndLength");
+  _compatibleHypothesis.push_back("Deflection1D");
+  _compatibleHypothesis.push_back("Arithmetic1D");
+  _compatibleHypothesis.push_back("GeometricProgression");
+  _compatibleHypothesis.push_back("FixedPoints1D");
+  _compatibleHypothesis.push_back("AutomaticLength");
+  _compatibleHypothesis.push_back("Adaptive1D");
+  // auxiliary:
+  _compatibleHypothesis.push_back("QuadraticMesh");
+  _compatibleHypothesis.push_back("Propagation");
+  _compatibleHypothesis.push_back("PropagOfDistribution");
 }
 
 //=============================================================================
 /*!
- *  
+ *
  */
 //=============================================================================
 
@@ -107,28 +114,34 @@ StdMeshers_Regular_1D::~StdMeshers_Regular_1D()
 
 //=============================================================================
 /*!
- *  
+ *
  */
 //=============================================================================
 
-bool StdMeshers_Regular_1D::CheckHypothesis
-                         (SMESH_Mesh&                          aMesh,
-                          const TopoDS_Shape&                  aShape,
-                          SMESH_Hypothesis::Hypothesis_Status& aStatus)
+bool StdMeshers_Regular_1D::CheckHypothesis( SMESH_Mesh&         aMesh,
+                                             const TopoDS_Shape& aShape,
+                                             Hypothesis_Status&  aStatus )
 {
-  _hypType = NONE;
-  _quadraticMesh = false;
+  _hypType        = NONE;
+  _quadraticMesh  = false;
+  _onlyUnaryInput = true;
 
+  // check propagation in a redefined GetUsedHypothesis()
   const list <const SMESHDS_Hypothesis * > & hyps =
     GetUsedHypothesis(aMesh, aShape, /*ignoreAuxiliaryHyps=*/false);
 
+  const SMESH_HypoFilter & propagFilter = StdMeshers_Propagation::GetFilter();
+
   // find non-auxiliary hypothesis
   const SMESHDS_Hypothesis *theHyp = 0;
+  set< string > propagTypes;
   list <const SMESHDS_Hypothesis * >::const_iterator h = hyps.begin();
   for ( ; h != hyps.end(); ++h ) {
     if ( static_cast<const SMESH_Hypothesis*>(*h)->IsAuxiliary() ) {
       if ( strcmp( "QuadraticMesh", (*h)->GetName() ) == 0 )
         _quadraticMesh = true;
+      if ( propagFilter.IsOk( static_cast< const SMESH_Hypothesis*>( *h ), aShape ))
+        propagTypes.insert( (*h)->GetName() );
     }
     else {
       if ( !theHyp )
@@ -144,19 +157,23 @@ bool StdMeshers_Regular_1D::CheckHypothesis
 
   string hypName = theHyp->GetName();
 
-  if (hypName == "LocalLength")
+  if ( !_mainEdge.IsNull() && _hypType == DISTRIB_PROPAGATION )
+  {
+    aStatus = SMESH_Hypothesis::HYP_OK;
+  }
+  else if ( hypName == "LocalLength" )
   {
     const StdMeshers_LocalLength * hyp =
       dynamic_cast <const StdMeshers_LocalLength * >(theHyp);
     ASSERT(hyp);
     _value[ BEG_LENGTH_IND ] = hyp->GetLength();
-    _value[ PRECISION_IND ] = hyp->GetPrecision();
+    _value[ PRECISION_IND  ] = hyp->GetPrecision();
     ASSERT( _value[ BEG_LENGTH_IND ] > 0 );
     _hypType = LOCAL_LENGTH;
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "MaxLength")
+  else if ( hypName == "MaxLength" )
   {
     const StdMeshers_MaxLength * hyp =
       dynamic_cast <const StdMeshers_MaxLength * >(theHyp);
@@ -171,7 +188,7 @@ bool StdMeshers_Regular_1D::CheckHypothesis
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "NumberOfSegments")
+  else if ( hypName == "NumberOfSegments" )
   {
     const StdMeshers_NumberOfSegments * hyp =
       dynamic_cast <const StdMeshers_NumberOfSegments * >(theHyp);
@@ -206,7 +223,7 @@ bool StdMeshers_Regular_1D::CheckHypothesis
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "Arithmetic1D")
+  else if ( hypName == "Arithmetic1D" )
   {
     const StdMeshers_Arithmetic1D * hyp =
       dynamic_cast <const StdMeshers_Arithmetic1D * >(theHyp);
@@ -221,7 +238,22 @@ bool StdMeshers_Regular_1D::CheckHypothesis
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "FixedPoints1D") {
+  else if ( hypName == "GeometricProgression" )
+  {
+    const StdMeshers_Geometric1D * hyp =
+      dynamic_cast <const StdMeshers_Geometric1D * >(theHyp);
+    ASSERT(hyp);
+    _value[ BEG_LENGTH_IND ] = hyp->GetStartLength();
+    _value[ END_LENGTH_IND ] = hyp->GetCommonRatio();
+    ASSERT( _value[ BEG_LENGTH_IND ] > 0 && _value[ END_LENGTH_IND ] > 0 );
+    _hypType = GEOMETRIC_1D;
+
+    _revEdgesIDs = hyp->GetReversedEdges();
+
+    aStatus = SMESH_Hypothesis::HYP_OK;
+  }
+
+  else if ( hypName == "FixedPoints1D" ) {
     _fpHyp = dynamic_cast <const StdMeshers_FixedPoints1D*>(theHyp);
     ASSERT(_fpHyp);
     _hypType = FIXED_POINTS_1D;
@@ -231,7 +263,7 @@ bool StdMeshers_Regular_1D::CheckHypothesis
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "StartEndLength")
+  else if ( hypName == "StartEndLength" )
   {
     const StdMeshers_StartEndLength * hyp =
       dynamic_cast <const StdMeshers_StartEndLength * >(theHyp);
@@ -246,7 +278,7 @@ bool StdMeshers_Regular_1D::CheckHypothesis
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "Deflection1D")
+  else if ( hypName == "Deflection1D" )
   {
     const StdMeshers_Deflection1D * hyp =
       dynamic_cast <const StdMeshers_Deflection1D * >(theHyp);
@@ -257,65 +289,97 @@ bool StdMeshers_Regular_1D::CheckHypothesis
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
 
-  else if (hypName == "AutomaticLength")
+  else if ( hypName == "AutomaticLength" )
   {
     StdMeshers_AutomaticLength * hyp = const_cast<StdMeshers_AutomaticLength *>
       (dynamic_cast <const StdMeshers_AutomaticLength * >(theHyp));
     ASSERT(hyp);
     _value[ BEG_LENGTH_IND ] = _value[ END_LENGTH_IND ] = hyp->GetLength( &aMesh, aShape );
-//     _value[ BEG_LENGTH_IND ] = hyp->GetLength( &aMesh, aShape );
-//     _value[ END_LENGTH_IND ] = Precision::Confusion(); // ?? or set to zero?
     ASSERT( _value[ BEG_LENGTH_IND ] > 0 );
     _hypType = MAX_LENGTH;
     aStatus = SMESH_Hypothesis::HYP_OK;
   }
+  else if ( hypName == "Adaptive1D" )
+  {
+    _adaptiveHyp = dynamic_cast < const StdMeshers_Adaptive1D* >(theHyp);
+    ASSERT(_adaptiveHyp);
+    _hypType = ADAPTIVE;
+    _onlyUnaryInput = false;
+    aStatus = SMESH_Hypothesis::HYP_OK;
+  }
   else
+  {
     aStatus = SMESH_Hypothesis::HYP_INCOMPATIBLE;
+  }
 
-  return ( _hypType != NONE );
+  if ( propagTypes.size() > 1 && aStatus == HYP_OK )
+  {
+    // detect concurrent Propagation hyps
+    _usedHypList.clear();
+    list< TopoDS_Shape > assignedTo;
+    if ( aMesh.GetHypotheses( aShape, propagFilter, _usedHypList, true, &assignedTo ) > 1 )
+    {
+      // find most simple shape and a hyp on it
+      int simpleShape = TopAbs_COMPOUND;
+      const SMESHDS_Hypothesis* localHyp = 0;
+      list< TopoDS_Shape >::iterator            shape = assignedTo.begin();
+      list< const SMESHDS_Hypothesis *>::iterator hyp = _usedHypList.begin();
+      for ( ; shape != assignedTo.end(); ++shape )
+        if ( shape->ShapeType() > simpleShape )
+        {
+          simpleShape = shape->ShapeType();
+          localHyp = (*hyp);
+        }
+      // check if there a different hyp on simpleShape
+      shape = assignedTo.begin();
+      hyp = _usedHypList.begin();
+      for ( ; hyp != _usedHypList.end(); ++hyp, ++shape )
+        if ( shape->ShapeType() == simpleShape &&
+             !localHyp->IsSameName( **hyp ))
+        {
+          aStatus = HYP_INCOMPAT_HYPS;
+          return error( SMESH_Comment("Hypotheses of both \"")
+                        << StdMeshers_Propagation::GetName() << "\" and \""
+                        << StdMeshers_PropagOfDistribution::GetName()
+                        << "\" types can't be applied to the same edge");
+        }
+    }
+  }
+
+  return ( aStatus == SMESH_Hypothesis::HYP_OK );
 }
 
-static bool computeParamByFunc(Adaptor3d_Curve& C3d, double first, double last,
-                               double length, bool theReverse,
-                               int nbSeg, Function& func,
+static bool computeParamByFunc(Adaptor3d_Curve& C3d,
+                               double first, double last, double length,
+                               bool theReverse, int nbSeg, Function& func,
                                list<double>& theParams)
 {
   // never do this way
   //OSD::SetSignal( true );
 
-  if (nbSeg <= 0)
+  if ( nbSeg <= 0 )
     return false;
 
-  MESSAGE( "computeParamByFunc" );
-
   int nbPnt = 1 + nbSeg;
-  vector<double> x(nbPnt, 0.);
+  vector<double> x( nbPnt, 0. );
 
-  if (!buildDistribution(func, 0.0, 1.0, nbSeg, x, 1E-4))
+  if ( !buildDistribution( func, 0.0, 1.0, nbSeg, x, 1E-4 ))
      return false;
-
-  MESSAGE( "Points:\n" );
-  char buf[1024];
-  for ( int i=0; i<=nbSeg; i++ )
-  {
-    sprintf(  buf, "%f\n", float(x[i] ) );
-    MESSAGE( buf );
-  }
-
-
 
   // apply parameters in range [0,1] to the space of the curve
   double prevU = first;
-  double sign = 1.;
-  if (theReverse)
+  double  sign = 1.;
+  if ( theReverse )
   {
     prevU = last;
-    sign = -1.;
+    sign  = -1.;
   }
-  for( int i = 1; i < nbSeg; i++ )
+
+  for ( int i = 1; i < nbSeg; i++ )
   {
     double curvLength = length * (x[i] - x[i-1]) * sign;
-    GCPnts_AbscissaPoint Discret( C3d, curvLength, prevU );
+    double tol        = Min( Precision::Confusion(), curvLength / 100. );
+    GCPnts_AbscissaPoint Discret( tol, C3d, curvLength, prevU );
     if ( !Discret.IsDone() )
       return false;
     double U = Discret.Parameter();
@@ -327,6 +391,7 @@ static bool computeParamByFunc(Adaptor3d_Curve& C3d, double first, double last,
   }
   if ( theReverse )
     theParams.reverse();
+
   return true;
 }
 
@@ -334,15 +399,15 @@ static bool computeParamByFunc(Adaptor3d_Curve& C3d, double first, double last,
 //================================================================================
 /*!
  * \brief adjust internal node parameters so that the last segment length == an
-  * \param a1 - the first segment length
-  * \param an - the last segment length
-  * \param U1 - the first edge parameter
-  * \param Un - the last edge parameter
-  * \param length - the edge length
-  * \param C3d - the edge curve
-  * \param theParams - internal node parameters to adjust
-  * \param adjustNeighbors2an - to adjust length of segments next to the last one
-  *  and not to remove parameters
+ *  \param a1 - the first segment length
+ *  \param an - the last segment length
+ *  \param U1 - the first edge parameter
+ *  \param Un - the last edge parameter
+ *  \param length - the edge length
+ *  \param C3d - the edge curve
+ *  \param theParams - internal node parameters to adjust
+ *  \param adjustNeighbors2an - to adjust length of segments next to the last one
+ *   and not to remove parameters
  */
 //================================================================================
 
@@ -354,19 +419,20 @@ static void compensateError(double a1, double an,
                             bool              adjustNeighbors2an = false)
 {
   int i, nPar = theParams.size();
-  if ( a1 + an < length && nPar > 1 )
+  if ( a1 + an <= length && nPar > 1 )
   {
     bool reverse = ( U1 > Un );
-    GCPnts_AbscissaPoint Discret(C3d, reverse ? an : -an, Un);
+    double tol   = Min( Precision::Confusion(), 0.01 * an );
+    GCPnts_AbscissaPoint Discret( tol, C3d, reverse ? an : -an, Un );
     if ( !Discret.IsDone() )
       return;
     double Utgt = Discret.Parameter(); // target value of the last parameter
     list<double>::reverse_iterator itU = theParams.rbegin();
     double Ul = *itU++; // real value of the last parameter
     double dUn = Utgt - Ul; // parametric error of <an>
-    if ( Abs(dUn) <= Precision::Confusion() )
-      return;
     double dU = Abs( Ul - *itU ); // parametric length of the last but one segment
+    if ( Abs(dUn) <= 1e-3 * dU )
+      return;
     if ( adjustNeighbors2an || Abs(dUn) < 0.5 * dU ) { // last segment is a bit shorter than it should
       // move the last parameter to the edge beginning
     }
@@ -375,10 +441,9 @@ static void compensateError(double a1, double an,
       dUn = Utgt - theParams.back();
     }
 
-    double q  = dUn / ( nPar - 1 );
     if ( !adjustNeighbors2an )
     {
-      q = dUn / ( Utgt - Un ); // (signed) factor of segment length change
+      double q = dUn / ( Utgt - Un ); // (signed) factor of segment length change
       for ( itU = theParams.rbegin(), i = 1; i < nPar; i++ ) {
         double prevU = *itU;
         (*itU) += dUn;
@@ -386,7 +451,13 @@ static void compensateError(double a1, double an,
         dUn = q * (*itU - prevU) * (prevU-U1)/(Un-U1);
       }
     }
-    else {
+    else if ( nPar == 1 )
+    {
+      theParams.back() += dUn;
+    }
+    else
+    {
+      double q  = dUn / ( nPar - 1 );
       theParams.back() += dUn;
       double sign = reverse ? -1 : 1;
       double prevU = theParams.back();
@@ -431,7 +502,7 @@ static void compensateError(double a1, double an,
 //    * \brief Clean mesh on edges
 //    * \param event - algo_event or compute_event itself (of SMESH_subMesh)
 //    * \param eventType - ALGO_EVENT or COMPUTE_EVENT (of SMESH_subMesh)
-//    * \param subMesh - the submesh where the event occures
+//    * \param subMesh - the submesh where the event occurs
 //    */
 //   void ProcessEvent(const int event, const int eventType, SMESH_subMesh* subMesh,
 //                     EventListenerData*, const SMESH_Hypothesis*)
@@ -532,7 +603,8 @@ void StdMeshers_Regular_1D::redistributeNearVertices (SMESH_Mesh &          theM
       {
         if ( !isEnd1 )
           vertexLength = -vertexLength;
-        GCPnts_AbscissaPoint Discret(theC3d, vertexLength, l);
+        double tol = Min( Precision::Confusion(), 0.01 * vertexLength );
+        GCPnts_AbscissaPoint Discret( tol, theC3d, vertexLength, l );
         if ( Discret.IsDone() ) {
           if ( nPar == 0 )
             theParameters.push_back( Discret.Parameter());
@@ -555,17 +627,20 @@ void StdMeshers_Regular_1D::redistributeNearVertices (SMESH_Mesh &          theM
         double Um = *itU++;
         double Lm = GCPnts_AbscissaPoint::Length( theC3d, Um, *itU);
         double L = GCPnts_AbscissaPoint::Length( theC3d, *itU, l);
-        StdMeshers_Regular_1D algo( *this );
-        algo._hypType = BEG_END_LENGTH;
-        algo._value[ BEG_LENGTH_IND ] = Lm;
-        algo._value[ END_LENGTH_IND ] = vertexLength;
+        static StdMeshers_Regular_1D* auxAlgo = 0;
+        if ( !auxAlgo ) {
+          auxAlgo = new StdMeshers_Regular_1D( _gen->GetANewId(), _studyId, _gen );
+          auxAlgo->_hypType = BEG_END_LENGTH;
+        }
+        auxAlgo->_value[ BEG_LENGTH_IND ] = Lm;
+        auxAlgo->_value[ END_LENGTH_IND ] = vertexLength;
         double from = *itU, to = l;
         if ( isEnd1 ) {
           std::swap( from, to );
-          std::swap( algo._value[ BEG_LENGTH_IND ], algo._value[ END_LENGTH_IND ]);
+          std::swap( auxAlgo->_value[ BEG_LENGTH_IND ], auxAlgo->_value[ END_LENGTH_IND ]);
         }
         list<double> params;
-        if ( algo.computeInternalParameters( theMesh, theC3d, L, from, to, params, false ))
+        if ( auxAlgo->computeInternalParameters( theMesh, theC3d, L, from, to, params, false ))
         {
           if ( isEnd1 ) params.reverse();
           while ( 1 + nHalf-- )
@@ -601,19 +676,76 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
 
   double f = theFirstU, l = theLastU;
 
+  // Propagation Of Distribution
+  //
+  if ( !_mainEdge.IsNull() && _hypType == DISTRIB_PROPAGATION )
+  {
+    TopoDS_Edge mainEdge = TopoDS::Edge( _mainEdge ); // should not be a reference!
+    _gen->Compute( theMesh, mainEdge, SMESH_Gen::SHAPE_ONLY_UPWARD );
+
+    SMESHDS_SubMesh* smDS = theMesh.GetMeshDS()->MeshElements( mainEdge );
+    if ( !smDS )
+      return error("No mesh on the source edge of Propagation Of Distribution");
+    if ( smDS->NbNodes() < 1 )
+      return true; // 1 segment
+
+    map< double, const SMDS_MeshNode* > mainEdgeParamsOfNodes;
+    if ( ! SMESH_Algo::GetSortedNodesOnEdge( theMesh.GetMeshDS(), mainEdge, _quadraticMesh,
+                                             mainEdgeParamsOfNodes, SMDSAbs_Edge ))
+      return error("Bad node parameters on the source edge of Propagation Of Distribution");
+    vector< double > segLen( mainEdgeParamsOfNodes.size() - 1 );
+    double totalLen = 0;
+    BRepAdaptor_Curve mainEdgeCurve( mainEdge );
+    map< double, const SMDS_MeshNode* >::iterator
+      u_n2 = mainEdgeParamsOfNodes.begin(), u_n1 = u_n2++;
+    for ( size_t i = 1; i < mainEdgeParamsOfNodes.size(); ++i, ++u_n1, ++u_n2 )
+    {
+      segLen[ i-1 ] = GCPnts_AbscissaPoint::Length( mainEdgeCurve,
+                                                    u_n1->first,
+                                                    u_n2->first);
+      totalLen += segLen[ i-1 ];
+    }
+    for ( size_t i = 0; i < segLen.size(); ++i )
+      segLen[ i ] *= theLength / totalLen;
+
+    size_t  iSeg = theReverse ? segLen.size()-1 : 0;
+    size_t  dSeg = theReverse ? -1 : +1;
+    double param = theFirstU;
+    size_t nbParams = 0;
+    for ( int i = 0, nb = segLen.size()-1; i < nb; ++i, iSeg += dSeg )
+    {
+      double tol = Min( Precision::Confusion(), 0.01 * segLen[ iSeg ]);
+      GCPnts_AbscissaPoint Discret( tol, theC3d, segLen[ iSeg ], param );
+      if ( !Discret.IsDone() ) break;
+      param = Discret.Parameter();
+      theParams.push_back( param );
+      ++nbParams;
+    }
+    if ( nbParams != segLen.size()-1 )
+      return error( SMESH_Comment("Can't divide into ") << segLen.size() << " segments");
+
+    compensateError( segLen[ theReverse ? segLen.size()-1 : 0 ],
+                     segLen[ theReverse ? 0 : segLen.size()-1 ],
+                     f, l, theLength, theC3d, theParams, true );
+    return true;
+  }
+
+
   switch( _hypType )
   {
   case LOCAL_LENGTH:
   case MAX_LENGTH:
-  case NB_SEGMENTS: {
-
+  case NB_SEGMENTS:
+  {
     double eltSize = 1;
+    int nbSegments;
     if ( _hypType == MAX_LENGTH )
     {
       double nbseg = ceil(theLength / _value[ BEG_LENGTH_IND ]); // integer sup
       if (nbseg <= 0)
-        nbseg = 1;                        // degenerated edge
-      eltSize = theLength / nbseg;
+        nbseg = 1; // degenerated edge
+      eltSize = theLength / nbseg * ( 1. - 1e-9 );
+      nbSegments = (int) nbseg;
     }
     else if ( _hypType == LOCAL_LENGTH )
     {
@@ -636,7 +768,7 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
           }
           if (computed) {
             SMESHDS_SubMesh* smds = sm->GetSubMeshDS();
-            int nb_segments = smds->NbElements();
+            int       nb_segments = smds->NbElements();
             if (nbseg - 1 <= nb_segments && nb_segments <= nbseg + 1) {
               isFound = true;
               nbseg = nb_segments;
@@ -654,13 +786,14 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
       if (nbseg <= 0)
         nbseg = 1;                        // degenerated edge
       eltSize = theLength / nbseg;
+      nbSegments = (int) nbseg;
     }
     else
     {
       // Number Of Segments hypothesis
-      int NbSegm = _ivalue[ NB_SEGMENTS_IND ];
-      if ( NbSegm < 1 )  return false;
-      if ( NbSegm == 1 ) return true;
+      nbSegments = _ivalue[ NB_SEGMENTS_IND ];
+      if ( nbSegments < 1 )  return false;
+      if ( nbSegments == 1 ) return true;
 
       switch (_ivalue[ DISTR_TYPE_IND ])
       {
@@ -670,8 +803,8 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
 
           if (fabs(scale - 1.0) < Precision::Confusion()) {
             // special case to avoid division by zero
-            for (int i = 1; i < NbSegm; i++) {
-              double param = f + (l - f) * i / NbSegm;
+            for (int i = 1; i < nbSegments; i++) {
+              double param = f + (l - f) * i / nbSegments;
               theParams.push_back( param );
             }
           } else {
@@ -679,19 +812,21 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
             if ( theReverse )
               scale = 1.0 / scale;
 
-            double alpha = pow(scale, 1.0 / (NbSegm - 1));
-            double factor = (l - f) / (1.0 - pow(alpha, NbSegm));
+            double  alpha = pow(scale, 1.0 / (nbSegments - 1));
+            double factor = (l - f) / (1.0 - pow(alpha, nbSegments));
 
-            for (int i = 1; i < NbSegm; i++) {
+            for (int i = 1; i < nbSegments; i++) {
               double param = f + factor * (1.0 - pow(alpha, i));
               theParams.push_back( param );
             }
           }
           const double lenFactor = theLength/(l-f);
+          const double minSegLen = Min( theParams.front() - f, l - theParams.back() );
+          const double       tol = Min( Precision::Confusion(), 0.01 * minSegLen );
           list<double>::iterator u = theParams.begin(), uEnd = theParams.end();
           for ( ; u != uEnd; ++u )
           {
-            GCPnts_AbscissaPoint Discret( theC3d, ((*u)-f) * lenFactor, f );
+            GCPnts_AbscissaPoint Discret( tol, theC3d, ((*u)-f) * lenFactor, f );
             if ( Discret.IsDone() )
               *u = Discret.Parameter();
           }
@@ -715,25 +850,30 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
         }
         break;
       case StdMeshers_NumberOfSegments::DT_Regular:
-        eltSize = theLength / _ivalue[ NB_SEGMENTS_IND ];
+        eltSize = theLength / nbSegments;
         break;
       default:
         return false;
       }
     }
-    GCPnts_UniformAbscissa Discret(theC3d, eltSize, f, l);
+
+    double tol = Min( Precision::Confusion(), 0.01 * eltSize );
+    GCPnts_UniformAbscissa Discret(theC3d, nbSegments + 1, f, l, tol );
     if ( !Discret.IsDone() )
       return error( "GCPnts_UniformAbscissa failed");
+    if ( Discret.NbPoints() < nbSegments + 1 )
+      Discret.Initialize(theC3d, nbSegments + 2, f, l, tol );
 
-    int NbPoints = Discret.NbPoints();
-    for ( int i = 2; i < NbPoints; i++ )
+    int NbPoints = Min( Discret.NbPoints(), nbSegments + 1 );
+    for ( int i = 2; i < NbPoints; i++ ) // skip 1st and last points
     {
       double param = Discret.Parameter(i);
       theParams.push_back( param );
     }
-    compensateError( eltSize, eltSize, f, l, theLength, theC3d, theParams ); // for PAL9899
+    compensateError( eltSize, eltSize, f, l, theLength, theC3d, theParams, true ); // for PAL9899
     return true;
   }
+
 
   case BEG_END_LENGTH: {
 
@@ -746,14 +886,15 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
       return error ( SMESH_Comment("Invalid segment lengths (")<<a1<<" and "<<an<<") "<<
                      "for an edge of length "<<theLength);
 
-    double U1 = theReverse ? l : f;
-    double Un = theReverse ? f : l;
-    double param = U1;
+    double      U1 = theReverse ? l : f;
+    double      Un = theReverse ? f : l;
+    double   param = U1;
     double eltSize = theReverse ? -a1 : a1;
+    double     tol = Min( Precision::Confusion(), 0.01 * Min( a1, an ));
     while ( 1 ) {
       // computes a point on a curve <theC3d> at the distance <eltSize>
       // from the point of parameter <param>.
-      GCPnts_AbscissaPoint Discret( theC3d, eltSize, param );
+      GCPnts_AbscissaPoint Discret( tol, theC3d, eltSize, param );
       if ( !Discret.IsDone() ) break;
       param = Discret.Parameter();
       if ( f < param && param < l )
@@ -767,23 +908,24 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
     return true;
   }
 
-  case ARITHMETIC_1D: {
-
+  case ARITHMETIC_1D:
+  {
     // arithmetic progression: SUM(n) = ( an - a1 + q ) * ( a1 + an ) / ( 2 * q ) = theLength
 
     double a1 = _value[ BEG_LENGTH_IND ];
     double an = _value[ END_LENGTH_IND ];
-    if ( 1.01*theLength < a1 + an)
+    if ( 1.01*theLength < a1 + an )
       return error ( SMESH_Comment("Invalid segment lengths (")<<a1<<" and "<<an<<") "<<
                      "for an edge of length "<<theLength);
 
-    double  q = ( an - a1 ) / ( 2 *theLength/( a1 + an ) - 1 );
-    int n = int(fabs(q) > numeric_limits<double>::min() ? ( 1+( an-a1 )/q ) : ( 1+theLength/a1 ));
+    double q = ( an - a1 ) / ( 2 *theLength/( a1 + an ) - 1 );
+    int    n = int(fabs(q) > numeric_limits<double>::min() ? ( 1+( an-a1 )/q ) : ( 1+theLength/a1 ));
 
-    double U1 = theReverse ? l : f;
-    double Un = theReverse ? f : l;
-    double param = U1;
+    double      U1 = theReverse ? l : f;
+    double      Un = theReverse ? f : l;
+    double   param = U1;
     double eltSize = a1;
+    double     tol = Min( Precision::Confusion(), 0.01 * Min( a1, an ));
     if ( theReverse ) {
       eltSize = -eltSize;
       q = -q;
@@ -791,7 +933,7 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
     while ( n-- > 0 && eltSize * ( Un - U1 ) > 0 ) {
       // computes a point on a curve <theC3d> at the distance <eltSize>
       // from the point of parameter <param>.
-      GCPnts_AbscissaPoint Discret( theC3d, eltSize, param );
+      GCPnts_AbscissaPoint Discret( tol, theC3d, eltSize, param );
       if ( !Discret.IsDone() ) break;
       param = Discret.Parameter();
       if ( param > f && param < l )
@@ -801,115 +943,147 @@ bool StdMeshers_Regular_1D::computeInternalParameters(SMESH_Mesh &     theMesh,
       eltSize += q;
     }
     compensateError( a1, an, U1, Un, theLength, theC3d, theParams );
+    if ( theReverse ) theParams.reverse(); // NPAL18025
+
+    return true;
+  }
+
+  case GEOMETRIC_1D:
+  {
+    double a1 = _value[ BEG_LENGTH_IND ], an = 0;
+    double q  = _value[ END_LENGTH_IND ];
+
+    double U1 = theReverse ? l : f;
+    double Un = theReverse ? f : l;
+    double param = U1;
+    double eltSize = a1;
+    if ( theReverse )
+      eltSize = -eltSize;
+
+    int nbParams = 0;
+    while ( true ) {
+      // computes a point on a curve <theC3d> at the distance <eltSize>
+      // from the point of parameter <param>.
+      double tol = Min( Precision::Confusion(), 0.01 * eltSize );
+      GCPnts_AbscissaPoint Discret( tol, theC3d, eltSize, param );
+      if ( !Discret.IsDone() ) break;
+      param = Discret.Parameter();
+      if ( f < param && param < l )
+        theParams.push_back( param );
+      else
+        break;
+      an = eltSize;
+      eltSize *= q;
+      ++nbParams;
+    }
+    if ( nbParams > 1 )
+    {
+      if ( Abs( param - Un ) < 0.2 * Abs( param - theParams.back() ))
+      {
+        compensateError( a1, Abs(eltSize), U1, Un, theLength, theC3d, theParams );
+      }
+      else if ( Abs( Un - theParams.back() ) <
+                0.2 * Abs( theParams.back() - *(++theParams.rbegin())))
+      {
+        theParams.pop_back();
+        compensateError( a1, Abs(an), U1, Un, theLength, theC3d, theParams );
+      }
+    }
     if (theReverse) theParams.reverse(); // NPAL18025
 
     return true;
   }
 
-  case FIXED_POINTS_1D: {
+  case FIXED_POINTS_1D:
+  {
     const std::vector<double>& aPnts = _fpHyp->GetPoints();
-    const std::vector<int>& nbsegs = _fpHyp->GetNbSegments();
-    int i = 0;
+    std::vector<int>          nbsegs = _fpHyp->GetNbSegments();
+
+    // sort normalized params, taking into account theReverse
     TColStd_SequenceOfReal Params;
-    for(; i<aPnts.size(); i++) {
-      if( aPnts[i]<0.0001 || aPnts[i]>0.9999 ) continue;
-      int j=1;
+    double tol = 1e-7 / theLength; // GCPnts_UniformAbscissa allows u2-u1 > 1e-7
+    for ( size_t i = 0; i < aPnts.size(); i++ )
+    {
+      if( aPnts[i] < tol || aPnts[i] > 1 - tol )
+        continue;
+      double u = theReverse ? ( 1 - aPnts[i] ) : aPnts[i];
+      int    j = 1;
       bool IsExist = false;
-      for(; j<=Params.Length(); j++) {
-        if( fabs(aPnts[i]-Params.Value(j)) < 1e-4 ) {
+      for ( ; j <= Params.Length(); j++ ) {
+        if ( Abs( u - Params.Value(j) ) < tol ) {
           IsExist = true;
           break;
         }
-        if( aPnts[i]<Params.Value(j) ) break;
+        if ( u < Params.Value(j) ) break;
       }
-      if(!IsExist) Params.InsertBefore(j,aPnts[i]);
+      if ( !IsExist ) Params.InsertBefore( j, u );
     }
-    double par2, par1, lp;
-    par1 = f;
-    lp = l;
-    double sign = 1.0;
-    if(theReverse) {
-      par1 = l;
-      lp = f;
-      sign = -1.0;
-    }
-    double eltSize, segmentSize = 0.;
-    double currAbscissa = 0;
-    for(i=0; i<Params.Length(); i++) {
-      int nbseg = ( i > nbsegs.size()-1 ) ? nbsegs[0] : nbsegs[i];
-      segmentSize = Params.Value(i+1)*theLength - currAbscissa;
-      currAbscissa += segmentSize;
-      GCPnts_AbscissaPoint APnt(theC3d, sign*segmentSize, par1);
-      if( !APnt.IsDone() )
+
+    // transform normalized Params into real ones
+    std::vector< double > uVec( Params.Length() + 2 );
+    uVec[ 0 ] = theFirstU;
+    double abscissa;
+    for ( int i = 1; i <= Params.Length(); i++ )
+    {
+      abscissa = Params( i ) * theLength;
+      tol      = Min( Precision::Confusion(), 0.01 * abscissa );
+      GCPnts_AbscissaPoint APnt( tol, theC3d, abscissa, theFirstU );
+      if ( !APnt.IsDone() )
         return error( "GCPnts_AbscissaPoint failed");
-      par2 = APnt.Parameter();
-      eltSize = segmentSize/nbseg;
-      GCPnts_UniformAbscissa Discret(theC3d, eltSize, par1, par2);
-      if(theReverse)
-        Discret.Initialize(theC3d, eltSize, par2, par1);
+      uVec[ i ] = APnt.Parameter();
+    }
+    uVec.back() = theLastU;
+
+    // divide segments
+    if ( theReverse )
+    {
+      if ((int) nbsegs.size() > Params.Length() + 1 )
+        nbsegs.resize( Params.Length() + 1 );
+      std::reverse( nbsegs.begin(), nbsegs.end() );
+    }
+    if ( nbsegs.empty() )
+    {
+      nbsegs.push_back( 1 );
+    }
+    Params.InsertBefore( 1, 0.0 );
+    Params.Append( 1.0 );
+    double eltSize, segmentSize, par1, par2;
+    for ( size_t i = 0; i < uVec.size()-1; i++ )
+    {
+      par1 = uVec[ i   ];
+      par2 = uVec[ i+1 ];
+      int nbseg = ( i < nbsegs.size() ) ? nbsegs[i] : nbsegs[0];
+      if ( nbseg == 1 )
+      {
+        theParams.push_back( par2 );
+      }
       else
-        Discret.Initialize(theC3d, eltSize, par1, par2);
-      if ( !Discret.IsDone() )
-        return error( "GCPnts_UniformAbscissa failed");
-      int NbPoints = Discret.NbPoints();
-      list<double> tmpParams;
-      for(int i=2; i<NbPoints; i++) {
-        double param = Discret.Parameter(i);
-        tmpParams.push_back( param );
+      {
+        segmentSize = ( Params( i+2 ) - Params( i+1 )) * theLength;
+        eltSize     = segmentSize / nbseg;
+        tol         = Min( Precision::Confusion(), 0.01 * eltSize );
+        GCPnts_UniformAbscissa Discret( theC3d, eltSize, par1, par2, tol );
+        if ( !Discret.IsDone() )
+          return error( "GCPnts_UniformAbscissa failed");
+        if ( Discret.NbPoints() < nbseg + 1 ) {
+          eltSize = segmentSize / ( nbseg + 0.5 );
+          Discret.Initialize( theC3d, eltSize, par1, par2, tol );
+        }
+        int NbPoints = Discret.NbPoints();
+        for ( int i = 2; i <= NbPoints; i++ ) {
+          double param = Discret.Parameter(i);
+          theParams.push_back( param );
+        }
       }
-      if (theReverse) {
-        compensateError( eltSize, eltSize, par2, par1, segmentSize, theC3d, tmpParams );
-        tmpParams.reverse();
-      }
-      else {
-        compensateError( eltSize, eltSize, par1, par2, segmentSize, theC3d, tmpParams );
-      }
-      list<double>::iterator itP = tmpParams.begin();
-      for(; itP != tmpParams.end(); itP++) {
-        theParams.push_back( *(itP) );
-      }
-      theParams.push_back( par2 );
+    }
+    theParams.pop_back();
 
-      par1 = par2;
-    }
-    // add for last
-    int nbseg = ( nbsegs.size() > Params.Length() ) ? nbsegs[Params.Length()] : nbsegs[0];
-    segmentSize = theLength - currAbscissa;
-    eltSize = segmentSize/nbseg;
-    GCPnts_UniformAbscissa Discret;
-    if(theReverse)
-      Discret.Initialize(theC3d, eltSize, par1, lp);
-    else
-      Discret.Initialize(theC3d, eltSize, lp, par1);
-    if ( !Discret.IsDone() )
-      return error( "GCPnts_UniformAbscissa failed");
-    int NbPoints = Discret.NbPoints();
-    list<double> tmpParams;
-    for(int i=2; i<NbPoints; i++) {
-      double param = Discret.Parameter(i);
-      tmpParams.push_back( param );
-    }
-    if (theReverse) {
-      compensateError( eltSize, eltSize, lp, par1, segmentSize, theC3d, tmpParams );
-      tmpParams.reverse();
-    }
-    else {
-      compensateError( eltSize, eltSize, par1, lp, segmentSize, theC3d, tmpParams );
-    }
-    list<double>::iterator itP = tmpParams.begin();
-    for(; itP != tmpParams.end(); itP++) {
-      theParams.push_back( *(itP) );
-    }
-
-    if (theReverse) {
-      theParams.reverse(); // NPAL18025
-    }
     return true;
   }
 
-  case DEFLECTION: {
-
-    GCPnts_UniformDeflection Discret(theC3d, _value[ DEFLECTION_IND ], f, l, true);
+  case DEFLECTION:
+  {
+    GCPnts_UniformDeflection Discret( theC3d, _value[ DEFLECTION_IND ], f, l, true );
     if ( !Discret.IsDone() )
       return false;
 
@@ -939,6 +1113,13 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
   if ( _hypType == NONE )
     return false;
 
+  if ( _hypType == ADAPTIVE )
+  {
+    _adaptiveHyp->GetAlgo()->InitComputeError();
+    _adaptiveHyp->GetAlgo()->Compute( theMesh, theShape );
+    return error( _adaptiveHyp->GetAlgo()->GetComputeError() );
+  }
+
   SMESHDS_Mesh * meshDS = theMesh.GetMeshDS();
 
   const TopoDS_Edge & EE = TopoDS::Edge(theShape);
@@ -953,15 +1134,14 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
 
   ASSERT(!VFirst.IsNull());
   ASSERT(!VLast.IsNull());
-  const SMDS_MeshNode * idFirst = SMESH_Algo::VertexNode( VFirst, meshDS );
-  const SMDS_MeshNode * idLast = SMESH_Algo::VertexNode( VLast, meshDS );
-  if (!idFirst || !idLast)
+  const SMDS_MeshNode * nFirst = SMESH_Algo::VertexNode( VFirst, meshDS );
+  const SMDS_MeshNode *  nLast = SMESH_Algo::VertexNode( VLast,  meshDS );
+  if ( !nFirst || !nLast )
     return error( COMPERR_BAD_INPUT_MESH, "No node on vertex");
 
   // remove elements created by e.g. patern mapping (PAL21999)
   // CLEAN event is incorrectly ptopagated seemingly due to Propagation hyp
   // so TEMPORARY solution is to clean the submesh manually
-  //theMesh.GetSubMesh(theShape)->ComputeStateEngine( SMESH_subMesh::CLEAN );
   if (SMESHDS_SubMesh * subMeshDS = meshDS->MeshElements(theShape))
   {
     SMDS_ElemIteratorPtr ite = subMeshDS->GetElements();
@@ -977,27 +1157,30 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
     }
   }
 
-  if (!Curve.IsNull())
+  double length = EdgeLength( E );
+  if ( !Curve.IsNull() && length > 0 )
   {
     list< double > params;
     bool reversed = false;
-    if ( theMesh.GetShapeToMesh().ShapeType() >= TopAbs_WIRE ) {
+    if ( theMesh.GetShapeToMesh().ShapeType() >= TopAbs_WIRE && _revEdgesIDs.empty() ) {
       // if the shape to mesh is WIRE or EDGE
       reversed = ( EE.Orientation() == TopAbs_REVERSED );
     }
     if ( !_mainEdge.IsNull() ) {
       // take into account reversing the edge the hypothesis is propagated from
+      // (_mainEdge.Orientation() marks mutual orientation of EDGEs in propagation chain)
       reversed = ( _mainEdge.Orientation() == TopAbs_REVERSED );
-      int mainID = meshDS->ShapeToIndex(_mainEdge);
-      if ( std::find( _revEdgesIDs.begin(), _revEdgesIDs.end(), mainID) != _revEdgesIDs.end())
-        reversed = !reversed;
+      if ( _hypType != DISTRIB_PROPAGATION ) {
+        int mainID = meshDS->ShapeToIndex(_mainEdge);
+        if ( std::find( _revEdgesIDs.begin(), _revEdgesIDs.end(), mainID) != _revEdgesIDs.end())
+          reversed = !reversed;
+      }
     }
     // take into account this edge reversing
     if ( std::find( _revEdgesIDs.begin(), _revEdgesIDs.end(), shapeID) != _revEdgesIDs.end())
       reversed = !reversed;
 
     BRepAdaptor_Curve C3d( E );
-    double length = EdgeLength( E );
     if ( ! computeInternalParameters( theMesh, C3d, length, f, l, params, reversed, true )) {
       return false;
     }
@@ -1006,19 +1189,10 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
     // edge extrema (indexes : 1 & NbPoints) already in SMDS (TopoDS_Vertex)
     // only internal nodes receive an edge position with param on curve
 
-    const SMDS_MeshNode * idPrev = idFirst;
+    const SMDS_MeshNode * nPrev = nFirst;
     double parPrev = f;
     double parLast = l;
 
-    /* NPAL18025
-    if (reversed) {
-      idPrev = idLast;
-      idLast = idFirst;
-      idFirst = idPrev;
-      parPrev = l;
-      parLast = f;
-    }
-    */
     for (list<double>::iterator itU = params.begin(); itU != params.end(); itU++) {
       double param = *itU;
       gp_Pnt P = Curve->Value(param);
@@ -1030,18 +1204,18 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
       if(_quadraticMesh) {
         // create medium node
         double prm = ( parPrev + param )/2;
-        gp_Pnt PM = Curve->Value(prm);
+        gp_Pnt  PM = Curve->Value(prm);
         SMDS_MeshNode * NM = meshDS->AddNode(PM.X(), PM.Y(), PM.Z());
         meshDS->SetNodeOnEdge(NM, shapeID, prm);
-        SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, node, NM);
+        SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, node, NM);
         meshDS->SetMeshElementOnShape(edge, shapeID);
       }
       else {
-        SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, node);
+        SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, node);
         meshDS->SetMeshElementOnShape(edge, shapeID);
       }
 
-      idPrev = node;
+      nPrev   = node;
       parPrev = param;
     }
     if(_quadraticMesh) {
@@ -1049,18 +1223,16 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
       gp_Pnt PM = Curve->Value(prm);
       SMDS_MeshNode * NM = meshDS->AddNode(PM.X(), PM.Y(), PM.Z());
       meshDS->SetNodeOnEdge(NM, shapeID, prm);
-      SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, idLast, NM);
+      SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, nLast, NM);
       meshDS->SetMeshElementOnShape(edge, shapeID);
     }
     else {
-      SMDS_MeshEdge* edge = meshDS->AddEdge(idPrev, idLast);
+      SMDS_MeshEdge* edge = meshDS->AddEdge(nPrev, nLast);
       meshDS->SetMeshElementOnShape(edge, shapeID);
     }
   }
   else
   {
-    //MESSAGE("************* Degenerated edge! *****************");
-
     // Edge is a degenerated Edge : We put n = 5 points on the edge.
     const int NbPoints = 5;
     BRep_Tool::Range( E, f, l ); // PAL15185
@@ -1068,7 +1240,7 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
 
     gp_Pnt P = BRep_Tool::Pnt(VFirst);
 
-    const SMDS_MeshNode * idPrev = idFirst;
+    const SMDS_MeshNode * nPrev = nFirst;
     for (int i = 2; i < NbPoints; i++) {
       double param = f + (i - 1) * du;
       SMDS_MeshNode * node = meshDS->AddNode(P.X(), P.Y(), P.Z());
@@ -1077,26 +1249,26 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
         double prm = param - du/2.;
         SMDS_MeshNode * NM = meshDS->AddNode(P.X(), P.Y(), P.Z());
         meshDS->SetNodeOnEdge(NM, shapeID, prm);
-        SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, node, NM);
+        SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, node, NM);
         meshDS->SetMeshElementOnShape(edge, shapeID);
       }
       else {
-        SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, node);
+        SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, node);
         meshDS->SetMeshElementOnShape(edge, shapeID);
       }
       meshDS->SetNodeOnEdge(node, shapeID, param);
-      idPrev = node;
+      nPrev = node;
     }
     if(_quadraticMesh) {
       // create medium node
       double prm = l - du/2.;
       SMDS_MeshNode * NM = meshDS->AddNode(P.X(), P.Y(), P.Z());
       meshDS->SetNodeOnEdge(NM, shapeID, prm);
-      SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, idLast, NM);
+      SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, nLast, NM);
       meshDS->SetMeshElementOnShape(edge, shapeID);
     }
     else {
-      SMDS_MeshEdge * edge = meshDS->AddEdge(idPrev, idLast);
+      SMDS_MeshEdge * edge = meshDS->AddEdge(nPrev, nLast);
       meshDS->SetMeshElementOnShape(edge, shapeID);
     }
   }
@@ -1110,18 +1282,22 @@ bool StdMeshers_Regular_1D::Compute(SMESH_Mesh & theMesh, const TopoDS_Shape & t
  */
 //=============================================================================
 
-bool StdMeshers_Regular_1D::Evaluate(SMESH_Mesh & theMesh,
+bool StdMeshers_Regular_1D::Evaluate(SMESH_Mesh &         theMesh,
                                      const TopoDS_Shape & theShape,
-                                     MapShapeNbElems& aResMap)
+                                     MapShapeNbElems&     theResMap)
 {
   if ( _hypType == NONE )
     return false;
 
-  //SMESHDS_Mesh * meshDS = theMesh.GetMeshDS();
+  if ( _hypType == ADAPTIVE )
+  {
+    _adaptiveHyp->GetAlgo()->InitComputeError();
+    _adaptiveHyp->GetAlgo()->Evaluate( theMesh, theShape, theResMap );
+    return error( _adaptiveHyp->GetAlgo()->GetComputeError() );
+  }
 
   const TopoDS_Edge & EE = TopoDS::Edge(theShape);
   TopoDS_Edge E = TopoDS::Edge(EE.Oriented(TopAbs_FORWARD));
-  //  int shapeID = meshDS->ShapeToIndex( E );
 
   double f, l;
   Handle(Geom_Curve) Curve = BRep_Tool::Curve(E, f, l);
@@ -1134,14 +1310,14 @@ bool StdMeshers_Regular_1D::Evaluate(SMESH_Mesh & theMesh,
 
   std::vector<int> aVec(SMDSEntity_Last,0);
 
-  if (!Curve.IsNull()) {
+  double length = EdgeLength( E );
+  if ( !Curve.IsNull() && length > 0 )
+  {
     list< double > params;
-
     BRepAdaptor_Curve C3d( E );
-    double length = EdgeLength( E );
     if ( ! computeInternalParameters( theMesh, C3d, length, f, l, params, false, true )) {
       SMESH_subMesh * sm = theMesh.GetSubMesh(theShape);
-      aResMap.insert(std::make_pair(sm,aVec));
+      theResMap.insert(std::make_pair(sm,aVec));
       SMESH_ComputeErrorPtr& smError = sm->GetComputeError();
       smError.reset( new SMESH_ComputeError(COMPERR_ALGO_FAILED,"Submesh can not be evaluated",this));
       return false;
@@ -1149,20 +1325,19 @@ bool StdMeshers_Regular_1D::Evaluate(SMESH_Mesh & theMesh,
     redistributeNearVertices( theMesh, C3d, length, params, VFirst, VLast );
 
     if(_quadraticMesh) {
-      aVec[SMDSEntity_Node] = 2*params.size() + 1;
+      aVec[SMDSEntity_Node     ] = 2*params.size() + 1;
       aVec[SMDSEntity_Quad_Edge] = params.size() + 1;
     }
     else {
       aVec[SMDSEntity_Node] = params.size();
       aVec[SMDSEntity_Edge] = params.size() + 1;
     }
-    
+
   }
   else {
-    //MESSAGE("************* Degenerated edge! *****************");
     // Edge is a degenerated Edge : We put n = 5 points on the edge.
-    if(_quadraticMesh) {
-      aVec[SMDSEntity_Node] = 11;
+    if ( _quadraticMesh ) {
+      aVec[SMDSEntity_Node     ] = 11;
       aVec[SMDSEntity_Quad_Edge] = 6;
     }
     else {
@@ -1171,8 +1346,8 @@ bool StdMeshers_Regular_1D::Evaluate(SMESH_Mesh & theMesh,
     }
   }
 
-  SMESH_subMesh * sm = theMesh.GetSubMesh(theShape);
-  aResMap.insert(std::make_pair(sm,aVec));
+  SMESH_subMesh * sm = theMesh.GetSubMesh( theShape );
+  theResMap.insert( std::make_pair( sm, aVec ));
 
   return true;
 }
@@ -1192,22 +1367,25 @@ StdMeshers_Regular_1D::GetUsedHypothesis(SMESH_Mesh &         aMesh,
   _usedHypList.clear();
   _mainEdge.Nullify();
 
-  SMESH_HypoFilter auxiliaryFilter, compatibleFilter;
-  auxiliaryFilter.Init( SMESH_HypoFilter::IsAuxiliary() );
-  InitCompatibleHypoFilter( compatibleFilter, /*ignoreAux=*/true );
+  SMESH_HypoFilter auxiliaryFilter( SMESH_HypoFilter::IsAuxiliary() );
+  const SMESH_HypoFilter* compatibleFilter = GetCompatibleHypoFilter(/*ignoreAux=*/true );
 
   // get non-auxiliary assigned directly to aShape
-  int nbHyp = aMesh.GetHypotheses( aShape, compatibleFilter, _usedHypList, false );
+  int nbHyp = aMesh.GetHypotheses( aShape, *compatibleFilter, _usedHypList, false );
 
   if (nbHyp == 0 && aShape.ShapeType() == TopAbs_EDGE)
   {
     // Check, if propagated from some other edge
-    _mainEdge = StdMeshers_Propagation::GetPropagationSource( aMesh, aShape );
+    bool isPropagOfDistribution = false;
+    _mainEdge = StdMeshers_Propagation::GetPropagationSource( aMesh, aShape,
+                                                              isPropagOfDistribution );
     if ( !_mainEdge.IsNull() )
     {
+      if ( isPropagOfDistribution )
+        _hypType = DISTRIB_PROPAGATION;
       // Propagation of 1D hypothesis from <aMainEdge> on this edge;
       // get non-auxiliary assigned to _mainEdge
-      nbHyp = aMesh.GetHypotheses( _mainEdge, compatibleFilter, _usedHypList, true );
+      nbHyp = aMesh.GetHypotheses( _mainEdge, *compatibleFilter, _usedHypList, true );
     }
   }
 
@@ -1225,4 +1403,17 @@ StdMeshers_Regular_1D::GetUsedHypothesis(SMESH_Mesh &         aMesh,
     _usedHypList.clear(); //only one compatible non-auxiliary hypothesis allowed
 
   return _usedHypList;
+}
+
+//================================================================================
+/*!
+ * \brief Pass CancelCompute() to a child algorithm
+ */
+//================================================================================
+
+void StdMeshers_Regular_1D::CancelCompute()
+{
+  SMESH_Algo::CancelCompute();
+  if ( _hypType == ADAPTIVE )
+    _adaptiveHyp->GetAlgo()->CancelCompute();
 }

@@ -1,9 +1,9 @@
-// Copyright (C) 2010-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2010-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -46,16 +46,17 @@ VTKCellType SMDS_MeshCell::toVtkType (SMDSAbs_EntityType smdsType)
   {
     vtkTypes.resize( SMDSEntity_Last+1, VTK_EMPTY_CELL );
     vtkTypes[ SMDSEntity_Node ]              = VTK_VERTEX;
-    vtkTypes[ SMDSEntity_0D ]                = VTK_VERTEX; //VTK_POLY_VERTEX; // ??
+    vtkTypes[ SMDSEntity_0D ]                = VTK_VERTEX;
     vtkTypes[ SMDSEntity_Edge ]              = VTK_LINE;
     vtkTypes[ SMDSEntity_Quad_Edge ]         = VTK_QUADRATIC_EDGE;
     vtkTypes[ SMDSEntity_Triangle ]          = VTK_TRIANGLE;
     vtkTypes[ SMDSEntity_Quad_Triangle ]     = VTK_QUADRATIC_TRIANGLE;
+    vtkTypes[ SMDSEntity_BiQuad_Triangle ]   = VTK_BIQUADRATIC_TRIANGLE;
     vtkTypes[ SMDSEntity_Quadrangle ]        = VTK_QUAD;
     vtkTypes[ SMDSEntity_Quad_Quadrangle ]   = VTK_QUADRATIC_QUAD;
     vtkTypes[ SMDSEntity_BiQuad_Quadrangle ] = VTK_BIQUADRATIC_QUAD;
     vtkTypes[ SMDSEntity_Polygon ]           = VTK_POLYGON;
-    //vtkTypes[ SMDSEntity_Quad_Polygon ]      = ;
+    vtkTypes[ SMDSEntity_Quad_Polygon ]      = VTK_QUADRATIC_POLYGON;
     vtkTypes[ SMDSEntity_Tetra ]             = VTK_TETRA;
     vtkTypes[ SMDSEntity_Quad_Tetra ]        = VTK_QUADRATIC_TETRA;
     vtkTypes[ SMDSEntity_Pyramid ]           = VTK_PYRAMID;
@@ -68,6 +69,7 @@ VTKCellType SMDS_MeshCell::toVtkType (SMDSAbs_EntityType smdsType)
     vtkTypes[ SMDSEntity_Hexagonal_Prism ]   = VTK_HEXAGONAL_PRISM;
     vtkTypes[ SMDSEntity_Polyhedra ]         = VTK_POLYHEDRON;
     //vtkTypes[ SMDSEntity_Quad_Polyhedra ]    = ;
+    vtkTypes[ SMDSEntity_Ball ]              = VTK_POLY_VERTEX;
   }
   return vtkTypes[ smdsType ];
 }
@@ -164,12 +166,14 @@ const std::vector< int >& SMDS_MeshCell::toVtkOrder(SMDSAbs_EntityType smdsType)
 
 //================================================================================
 /*!
- * \brief Return indices to reverse an SMDS cell of given type
+ * \brief Return indices to reverse an SMDS cell of given type.
+ *        nbNodes is useful for polygons
  * Usage: reverseIDs[i] = forwardIDs[ indices[ i ]]
  */
 //================================================================================
 
-const std::vector<int>& SMDS_MeshCell::reverseSmdsOrder(SMDSAbs_EntityType smdsType)
+const std::vector<int>& SMDS_MeshCell::reverseSmdsOrder(SMDSAbs_EntityType smdsType,
+                                                        const size_t       nbNodes)
 {
   static std::vector< std::vector< int > > reverseInterlaces;
   if ( reverseInterlaces.empty() )
@@ -179,6 +183,7 @@ const std::vector<int>& SMDS_MeshCell::reverseSmdsOrder(SMDSAbs_EntityType smdsT
       const int ids[] = {0};
       reverseInterlaces[SMDSEntity_0D].assign( &ids[0], &ids[0]+1 );
       reverseInterlaces[SMDSEntity_Node].assign( &ids[0], &ids[0]+1 );
+      reverseInterlaces[SMDSEntity_Ball].assign( &ids[0], &ids[0]+1 );
     }
     {
       const int ids[] = {1,0};
@@ -195,6 +200,10 @@ const std::vector<int>& SMDS_MeshCell::reverseSmdsOrder(SMDSAbs_EntityType smdsT
     {
       const int ids[] = {0,2,1,5,4,3};
       reverseInterlaces[SMDSEntity_Quad_Triangle].assign( &ids[0], &ids[0]+6 );
+    }
+    {
+      const int ids[] = {0,2,1,5,4,3,6};
+      reverseInterlaces[SMDSEntity_BiQuad_Triangle].assign( &ids[0], &ids[0]+7 );
     }
     {
       const int ids[] = {0,3,2,1};
@@ -249,6 +258,31 @@ const std::vector<int>& SMDS_MeshCell::reverseSmdsOrder(SMDSAbs_EntityType smdsT
       reverseInterlaces[SMDSEntity_Hexagonal_Prism].assign( &ids[0], &ids[0]+12 );
     }
   }
+
+  if ( smdsType == SMDSEntity_Polygon )
+  {
+    if ( reverseInterlaces[ smdsType ].size() != nbNodes )
+    {
+      reverseInterlaces[ smdsType ].resize( nbNodes );
+      for ( size_t i = 0; i < nbNodes; ++i )
+        reverseInterlaces[ smdsType ][i] = nbNodes - i - 1;
+    }
+  }
+  else if ( smdsType == SMDSEntity_Quad_Polygon )
+  {
+    if ( reverseInterlaces[ smdsType ].size() != nbNodes )
+    {
+      // e.g. for 8 nodes: [ 0, 3,2,1, 7,6,5,4 ]
+      reverseInterlaces[ smdsType ].resize( nbNodes );
+      size_t pos = 0;
+      reverseInterlaces[ smdsType ][pos++] = 0;
+      for ( int i = nbNodes / 2 - 1; i > 0 ; --i ) // 3,2,1
+        reverseInterlaces[ smdsType ][pos++] = i;
+      for ( int i = nbNodes - 1, nb = nbNodes / 2; i >= nb; --i ) // 7,6,5,4
+        reverseInterlaces[ smdsType ][pos++] = i;
+    }
+  }
+  
   return reverseInterlaces[smdsType];
 }
 
@@ -259,7 +293,8 @@ const std::vector<int>& SMDS_MeshCell::reverseSmdsOrder(SMDSAbs_EntityType smdsT
  */
 //================================================================================
 
-const std::vector<int>& SMDS_MeshCell::interlacedSmdsOrder(SMDSAbs_EntityType smdsType)
+const std::vector<int>& SMDS_MeshCell::interlacedSmdsOrder(SMDSAbs_EntityType smdsType,
+                                                           const size_t       nbNodes)
 {
   static std::vector< std::vector< int > > interlace;
   if ( interlace.empty() )
@@ -270,13 +305,27 @@ const std::vector<int>& SMDS_MeshCell::interlacedSmdsOrder(SMDSAbs_EntityType sm
       interlace[SMDSEntity_Quad_Edge].assign( &ids[0], &ids[0]+3 );
     }
     {
-      const int ids[] = {0,3,1,4,2,5};
-      interlace[SMDSEntity_Quad_Triangle].assign( &ids[0], &ids[0]+6 );
+      const int ids[] = {0,3,1,4,2,5,6};
+      interlace[SMDSEntity_Quad_Triangle  ].assign( &ids[0], &ids[0]+6 );
+      interlace[SMDSEntity_BiQuad_Triangle].assign( &ids[0], &ids[0]+7 );
     }
     {
       const int ids[] = {0,4,1,5,2,6,3,7,8};
-      interlace[SMDSEntity_Quad_Quadrangle].assign( &ids[0], &ids[0]+8 );
+      interlace[SMDSEntity_Quad_Quadrangle  ].assign( &ids[0], &ids[0]+8 );
       interlace[SMDSEntity_BiQuad_Quadrangle].assign( &ids[0], &ids[0]+9 );
+    }
+  }
+
+  if ( smdsType == SMDSEntity_Quad_Polygon )
+  {
+    if ( interlace[smdsType].size() != nbNodes )
+    {
+      interlace[smdsType].resize( nbNodes );
+      for ( size_t i = 0; i < nbNodes / 2; ++i )
+      {
+        interlace[smdsType][i*2+0] = i;
+        interlace[smdsType][i*2+1] = i + nbNodes / 2;
+      }
     }
   }
   return interlace[smdsType];
@@ -299,6 +348,83 @@ SMDSAbs_EntityType SMDS_MeshCell::toSmdsType(VTKCellType vtkType)
   }
   return smdsTypes[ vtkType ];
 }
+
+//================================================================================
+/*!
+ * \brief Return SMDSAbs_ElementType by SMDSAbs_GeometryType
+ */
+//================================================================================
+
+SMDSAbs_ElementType SMDS_MeshCell::toSmdsType(SMDSAbs_GeometryType geomType)
+{
+  switch ( geomType ) {
+  case SMDSGeom_POINT:     return SMDSAbs_0DElement;
+
+  case SMDSGeom_EDGE:      return SMDSAbs_Edge; 
+
+  case SMDSGeom_TRIANGLE:
+  case SMDSGeom_QUADRANGLE:
+  case SMDSGeom_POLYGON:   return SMDSAbs_Face;
+
+  case SMDSGeom_TETRA:
+  case SMDSGeom_PYRAMID:
+  case SMDSGeom_HEXA:
+  case SMDSGeom_PENTA:
+  case SMDSGeom_HEXAGONAL_PRISM:
+  case SMDSGeom_POLYHEDRA: return SMDSAbs_Volume;
+
+  case SMDSGeom_BALL:      return SMDSAbs_Ball;
+
+  case SMDSGeom_NONE: ;
+  }
+  return SMDSAbs_All;
+}
+
+//================================================================================
+/*!
+ * \brief Return SMDSAbs_ElementType by SMDSAbs_EntityType
+ */
+//================================================================================
+
+SMDSAbs_ElementType SMDS_MeshCell::toSmdsType(SMDSAbs_EntityType entityType)
+{
+  switch ( entityType ) {
+  case SMDSEntity_Node:           return SMDSAbs_Node;
+
+  case SMDSEntity_0D:             return SMDSAbs_0DElement;
+
+  case SMDSEntity_Edge:
+  case SMDSEntity_Quad_Edge:      return SMDSAbs_Edge;
+
+  case SMDSEntity_Triangle:
+  case SMDSEntity_Quad_Triangle:
+  case SMDSEntity_BiQuad_Triangle:
+  case SMDSEntity_Quadrangle:
+  case SMDSEntity_Quad_Quadrangle:
+  case SMDSEntity_BiQuad_Quadrangle:
+  case SMDSEntity_Polygon:
+  case SMDSEntity_Quad_Polygon:   return SMDSAbs_Face;
+
+  case SMDSEntity_Tetra:
+  case SMDSEntity_Quad_Tetra:
+  case SMDSEntity_Pyramid:
+  case SMDSEntity_Quad_Pyramid:
+  case SMDSEntity_Hexa:
+  case SMDSEntity_Quad_Hexa:
+  case SMDSEntity_TriQuad_Hexa:
+  case SMDSEntity_Penta:
+  case SMDSEntity_Quad_Penta:
+  case SMDSEntity_Hexagonal_Prism:
+  case SMDSEntity_Polyhedra:
+  case SMDSEntity_Quad_Polyhedra: return SMDSAbs_Volume;
+
+  case SMDSEntity_Ball:           return SMDSAbs_Ball;
+
+  case SMDSEntity_Last:;
+  }
+  return SMDSAbs_All;
+}
+
 
 //================================================================================
 /*!

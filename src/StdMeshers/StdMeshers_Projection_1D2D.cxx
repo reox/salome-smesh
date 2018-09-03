@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -25,8 +25,11 @@
 //
 #include "StdMeshers_Projection_1D2D.hxx"
 
+#include "SMESHDS_Mesh.hxx"
 #include "SMESH_Gen.hxx"
+#include "SMESH_Mesh.hxx"
 #include "SMESH_MesherHelper.hxx"
+#include "SMESH_subMesh.hxx"
 #include "SMESH_subMeshEventListener.hxx"
 #include "StdMeshers_FaceSide.hxx"
 #include "StdMeshers_ProjectionSource2D.hxx"
@@ -68,8 +71,8 @@ namespace
   /*!
    * \brief Structure used to temporary remove EventProparatorToEdges from faceSubMesh
    *  in order to prevent propagation of CLEAN event from FACE to EDGEs during 
-   *  StdMeshers_Projection_1D2D::Compute(). The CLEAN event is emmited by Pattern mapper
-   * and causes removal of faces generated on adjacent FACEs.
+   *  StdMeshers_Projection_1D2D::Compute(). The CLEAN event is emitted by Pattern mapper
+   *  and causes removal of faces generated on adjacent FACEs.
    */
   struct UnsetterOfEventProparatorToEdges
   {
@@ -107,8 +110,12 @@ bool StdMeshers_Projection_1D2D::Compute(SMESH_Mesh& theMesh, const TopoDS_Shape
 {
   UnsetterOfEventProparatorToEdges eventBarrier( theMesh.GetSubMesh( theShape ));
 
+  // 1) Project faces
+
   if ( !StdMeshers_Projection_2D::Compute(theMesh, theShape))
     return false;
+
+  // 2) Create segments
 
   SMESHDS_Mesh * meshDS = theMesh.GetMeshDS();
 
@@ -119,10 +126,42 @@ bool StdMeshers_Projection_1D2D::Compute(SMESH_Mesh& theMesh, const TopoDS_Shape
   SMESH_MesherHelper helper( theMesh );
   helper.SetSubShape( theShape );
 
+  if ( _quadraticMesh )
+  {
+    // 2a) Move some medium nodes from FACE to EDGES. They are on FACE because
+    // EDGEs are discreteized later than FACE, in this case.
+
+    SMESH_MesherHelper posFixer( theMesh );
+    posFixer.ToFixNodeParameters( true );
+    SMDS_ElemIteratorPtr fIt = faceSubMesh->GetElements();
+    vector< const SMDS_MeshNode* > nodes;
+    double dummyU, tol = 1e-7;
+    while ( fIt->more() ) // loop on mesh faces created by StdMeshers_Projection_2D
+    {
+      const SMDS_MeshElement* f = fIt->next();
+      //if ( !f->IsQuadratic() ) continue;
+      nodes.assign( SMDS_MeshElement::iterator( f->interlacedNodesElemIterator() ),
+                    SMDS_MeshElement::iterator() );
+      nodes.push_back( nodes[0] );
+      for ( size_t i = 2; i < nodes.size(); i += 2 )
+      {
+        pair<int, TopAbs_ShapeEnum> idType = helper.GetMediumPos( nodes[i], nodes[i-2] );
+        if ( idType.second == TopAbs_EDGE &&
+             idType.first  != nodes[i-1]->getshapeId() )
+        {
+          faceSubMesh->RemoveNode( nodes[i-1], /*isDeleted=*/false );
+          meshDS->SetNodeOnEdge( (SMDS_MeshNode*) nodes[i-1], idType.first );
+          posFixer.SetSubShape( idType.first );
+          posFixer.CheckNodeU( TopoDS::Edge( posFixer.GetSubShape() ),
+                               nodes[i-1], dummyU=0., tol, /*force=*/true );
+        }
+      }
+    }
+  }
   TopoDS_Face F = TopoDS::Face( theShape );
   TError err;
-  TSideVector wires = StdMeshers_FaceSide::GetFaceWires( F, theMesh,
-                                                         /*ignoreMediumNodes=*/false, err);
+  TSideVector wires = StdMeshers_FaceSide::GetFaceWires( F, theMesh, /*ignoreMediumNodes=*/false,
+                                                         err, &helper);
   if ( err && !err->IsOK() )
     return error( err );
 
@@ -172,7 +211,7 @@ bool StdMeshers_Projection_1D2D::Compute(SMESH_Mesh& theMesh, const TopoDS_Shape
         meshDS->SetMeshElementOnShape( e, edgeID );
       }
     }
-  }   
+  }
 
   return true;
 }
@@ -194,7 +233,7 @@ bool StdMeshers_Projection_1D2D::Evaluate(SMESH_Mesh&         theMesh,
   if ( !srcMesh ) srcMesh = & theMesh;
   SMESH_subMesh* srcFaceSM = srcMesh->GetSubMesh( srcFace );
 
-  typedef StdMeshers_ProjectionUtils SPU;
+  namespace SPU = StdMeshers_ProjectionUtils;
   SPU::TShapeShapeMap shape2ShapeMap;
   SPU::InitVertexAssociation( _sourceHypo, shape2ShapeMap );
   if ( !SPU::FindSubShapeAssociation( theShape, &theMesh, srcFace, srcMesh, shape2ShapeMap))

@@ -1,9 +1,9 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,6 +24,9 @@
 // Author    : Edward AGAPOV (eap)
 //
 #include "StdMeshers_UseExisting_1D2D.hxx"
+
+#include "SMESH_Mesh.hxx"
+#include "SMESH_subMesh.hxx"
 
 //=======================================================================
 //function : StdMeshers_UseExisting_1D
@@ -56,10 +59,11 @@ bool StdMeshers_UseExisting_1D::CheckHypothesis(SMESH_Mesh& ,
 //purpose  : 
 //=======================================================================
 
-bool StdMeshers_UseExisting_1D::Compute(SMESH_Mesh&, const TopoDS_Shape&)
+bool StdMeshers_UseExisting_1D::Compute(SMESH_Mesh& mesh, const TopoDS_Shape& edge)
 {
   // This algorithm exists to allow mesh generation by mesh
   // edition functions in TUI mode
+  mesh.GetSubMesh( edge )->SetIsAlwaysComputed( true );
   return true;
 }
 
@@ -110,10 +114,11 @@ bool StdMeshers_UseExisting_2D::CheckHypothesis(SMESH_Mesh& ,
 //purpose  : 
 //=======================================================================
 
-bool StdMeshers_UseExisting_2D::Compute(SMESH_Mesh&, const TopoDS_Shape&)
+bool StdMeshers_UseExisting_2D::Compute(SMESH_Mesh& mesh, const TopoDS_Shape& face)
 {
   // This algorithm exists to allow mesh generation by mesh edition
   // functions in TUI mode
+  mesh.GetSubMesh( face )->SetIsAlwaysComputed( true );
   return true;
 }
 

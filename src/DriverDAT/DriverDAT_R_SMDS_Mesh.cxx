@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -47,13 +47,12 @@ Driver_Mesh::Status DriverDAT_R_SMDS_Mesh::Perform()
   int NoeudsMaille[20];
   int NoeudMaille;
   
-  MESSAGE("in DriverDAT_R_SMDS_Mesh::Read()");
   /****************************************************************************
    *                      OUVERTURE DU FICHIER EN LECTURE                      *
    ****************************************************************************/
   char *file2Read = (char *)myFile.c_str();
   FILE* aFileId = fopen(file2Read, "r");
-  if (aFileId < 0) {
+  if ( !aFileId ) {
     fprintf(stderr, ">> ERREUR : ouverture du fichier %s \n", file2Read);
     return DRS_FAIL;
   }

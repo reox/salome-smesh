@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -44,22 +44,6 @@
 using namespace std;
 using namespace UNV;
 
-namespace{
-  typedef std::vector<size_t> TConnect;
-
-  int GetConnect(const SMDS_ElemIteratorPtr& theNodesIter, 
-                 TConnect& theConnect)
-  {
-    theConnect.clear();
-    for(; theNodesIter->more();){
-      const SMDS_MeshElement* anElem = theNodesIter->next();
-      theConnect.push_back(anElem->GetID());
-    }
-    return theConnect.size();
-  }
-  
-}
-
 Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
 {
   Kernel_Utils::Localizer loc;
@@ -75,7 +59,6 @@ Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
       TDataSet aDataSet2411;
       // Storing SMDS nodes to the UNV file
       //-----------------------------------
-      MESSAGE("Perform - myMesh->NbNodes() = "<<myMesh->NbNodes());
       SMDS_NodeIteratorPtr aNodesIter = myMesh->nodesIterator();
       TRecord aRec;
       while ( aNodesIter->more() )
@@ -87,16 +70,13 @@ Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
         aRec.coord[2] = aNode->Z();
         aDataSet2411.push_back( aRec );
       }
-      MESSAGE("Perform - aDataSet2411.size() = "<<aDataSet2411.size());
       UNV2411::Write(out_stream,aDataSet2411);
     }
     {
       using namespace UNV2412;
       TDataSet aDataSet2412;
-      TConnect aConnect;
 
       // Storing SMDS Edges
-      MESSAGE("Perform - myMesh->NbEdges() = "<<myMesh->NbEdges());
       if(myMesh->NbEdges()){
         SMDS_EdgeIteratorPtr anIter = myMesh->edgesIterator();
         while( anIter->more() )
@@ -106,24 +86,21 @@ Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
           TRecord aRec;
           aRec.label = anElem->GetID();
           aRec.node_labels.reserve(aNbNodes);
-          SMDS_ElemIteratorPtr aNodesIter;
-          aNodesIter = anElem->nodesIteratorToUNV();
           if( anElem->IsQuadratic() ) {
             aRec.fe_descriptor_id = 22;
           } else {
             aRec.fe_descriptor_id = 11;
           }
+          SMDS_NodeIteratorPtr aNodesIter = anElem->nodesIteratorToUNV();
           while( aNodesIter->more())
           {
-            const SMDS_MeshElement* aNode = aNodesIter->next();
-            aRec.node_labels.push_back(aNode->GetID());
+            const SMDS_MeshNode* aNode = aNodesIter->next();
+            aRec.node_labels.push_back( aNode->GetID() );
           }
           aDataSet2412.push_back(aRec);
         }
-        MESSAGE("Perform - aDataSet2412.size() = "<<aDataSet2412.size());
       }
 
-      MESSAGE("Perform - myMesh->NbFaces() = "<<myMesh->NbFaces());
       if ( myMesh->NbFaces() )
       {
         SMDS_FaceIteratorPtr anIter = myMesh->facesIterator();
@@ -135,91 +112,44 @@ Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
           TRecord aRec;
           aRec.label = anElem->GetID();
           aRec.node_labels.reserve(aNbNodes);
-          SMDS_ElemIteratorPtr aNodesIter;
-          aNodesIter = anElem->nodesIteratorToUNV();
-          for(; aNodesIter->more();){
-            const SMDS_MeshElement* aNode = aNodesIter->next();
-            aRec.node_labels.push_back(aNode->GetID());
+          SMDS_NodeIteratorPtr aNodesIter = anElem->nodesIteratorToUNV();
+          while( aNodesIter->more() ) {
+            const SMDS_MeshNode* aNode = aNodesIter->next();
+            aRec.node_labels.push_back( aNode->GetID() );
           }
-          switch(aNbNodes){
-          case 3:
-            aRec.fe_descriptor_id = 41;
-            break;
-          case 4:
-            aRec.fe_descriptor_id = 44;
-            break;
-          case 6:
-            aRec.fe_descriptor_id = 42;
-            break;
-          case 8:
-            aRec.fe_descriptor_id = 45;
-            break;
-          case 9:
-            aRec.fe_descriptor_id = 45;
-            aRec.node_labels.resize( 8 );
-            break;
+          switch ( aNbNodes ) {
+          case 3: aRec.fe_descriptor_id = 41; break;
+          case 4: aRec.fe_descriptor_id = 44; break;
+          case 6: aRec.fe_descriptor_id = 42; break;
+          case 7: aRec.fe_descriptor_id = 42; break;
+          case 8: aRec.fe_descriptor_id = 45; break;
+          case 9: aRec.fe_descriptor_id = 45; aRec.node_labels.resize( 8 ); break;
           default:
             continue;
           }
           aDataSet2412.push_back(aRec);
         }
-        MESSAGE("Perform - aDataSet2412.size() = "<<aDataSet2412.size());
       }
 
-      MESSAGE("Perform - myMesh->NbVolumes() = "<<myMesh->NbVolumes());
       if ( myMesh->NbVolumes() )
       {
         SMDS_VolumeIteratorPtr anIter = myMesh->volumesIterator();
         while ( anIter->more())
         {
           const SMDS_MeshVolume* anElem = anIter->next();
-          int aNbNodes = anElem->NbNodes();
-          //MESSAGE("aNbNodes="<<aNbNodes);
-          SMDS_ElemIteratorPtr aNodesIter;
-          aNodesIter = anElem->nodesIteratorToUNV();
-          if ( anElem->IsPoly() ) {
+          if ( anElem->IsPoly() )
             continue;
-            // MESSAGE("anElem->IsPoly");
-            // if ( const SMDS_VtkVolume* ph =
-            //      dynamic_cast<const SMDS_VtkVolume*> (anElem))
-            // {
-            //   aNbNodes = ph->NbUniqueNodes();
-            //   aNodesIter = ph->uniqueNodesIterator();
-            // }
-          }
-
+          int aNbNodes = anElem->NbNodes();
           int anId = -1;
           switch(aNbNodes) {
-          case 4: {
-            anId = 111;
-            break;
-          }
-          case 6: {
-            anId = 112;
-            break;
-          }
-          case 8: {
-            anId = 115;
-            break;
-          }
-          case 10: {
-            anId = 118;
-            break;
-          }
-          case 13: {
-            anId = 114;
-            break;
-          }
-          case 15: {
-            anId = 113;
-            break;
-          }
+          case 4:  anId = 111; break;
+          case 6:  anId = 112; break;
+          case 8:  anId = 115; break;
+          case 10: anId = 118; break;
+          case 13: anId = 114; break;
+          case 15: anId = 113; break;
           case 20:
-          case 27: {
-            anId = 116;
-            aNbNodes = 20;
-            break;
-          }
+          case 27: anId = 116; aNbNodes = 20; break;
           default:
             continue;
           }
@@ -228,7 +158,8 @@ Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
             aRec.label = anElem->GetID();
             aRec.fe_descriptor_id = anId;
             aRec.node_labels.reserve(aNbNodes);
-            while ( aNodesIter->more() && aRec.node_labels.size() < aNbNodes )
+            SMDS_NodeIteratorPtr aNodesIter = anElem->nodesIteratorToUNV();
+            while ( aNodesIter->more() && (int)aRec.node_labels.size() < aNbNodes )
             {
               const SMDS_MeshElement* aNode = aNodesIter->next();
               aRec.node_labels.push_back(aNode->GetID());
@@ -236,7 +167,6 @@ Driver_Mesh::Status DriverUNV_W_SMDS_Mesh::Perform()
             aDataSet2412.push_back(aRec);
           }
         }
-        MESSAGE("Perform - aDataSet2412.size() = "<<aDataSet2412.size());
       }
       UNV2412::Write(out_stream,aDataSet2412);
     }

@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -148,13 +148,13 @@ istream & StdMeshers_LocalLength::LoadFrom(istream & load)
   bool isOK = true;
   double a;
 
-  isOK = (load >> a);
+  isOK = static_cast<bool>(load >> a);
   if (isOK)
     this->_length = a;
   else
     load.clear(ios::badbit | load.rdstate());
 
-  isOK = (load >> a);
+  isOK = static_cast<bool>(load >> a);
   if (isOK)
     this->_precision = a;
   else
@@ -216,13 +216,15 @@ bool StdMeshers_LocalLength::SetParametersByMesh(const SMESH_Mesh*   theMesh,
   {
     const TopoDS_Edge& edge = TopoDS::Edge( edgeMap( iE ));
     Handle(Geom_Curve) C = BRep_Tool::Curve( edge, L, UMin, UMax );
+    if ( C.IsNull() )
+      continue;
     GeomAdaptor_Curve AdaptCurve(C, UMin, UMax);
 
     vector< double > params;
     SMESHDS_Mesh* aMeshDS = const_cast< SMESH_Mesh* >( theMesh )->GetMeshDS();
     if ( SMESH_Algo::GetNodeParamOnEdge( aMeshDS, edge, params ))
     {
-      for ( int i = 1; i < params.size(); ++i )
+      for ( size_t i = 1; i < params.size(); ++i )
         _length += GCPnts_AbscissaPoint::Length( AdaptCurve, params[ i-1 ], params[ i ]);
       nbEdges += params.size() - 1;
     }

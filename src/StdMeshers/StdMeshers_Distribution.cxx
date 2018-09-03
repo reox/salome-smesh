@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,7 @@
 //  File   : StdMeshers_Distribution.cxx
 //  Author : Alexandre SOLOVYOV
 //  Module : SMESH
-//  $Header: /home/server/cvs/SMESH/SMESH_SRC/src/StdMeshers/StdMeshers_Distribution.cxx,v 1.7.2.1.6.2.8.1 2012-04-13 09:31:19 vsr Exp $
+//  $Header$
 //
 #include "StdMeshers_Distribution.hxx"
 
@@ -36,12 +36,15 @@
 #endif
 
 #include <Standard_Failure.hxx>
+#include <Expr_NamedUnknown.hxx>
 
 #ifdef NO_CAS_CATCH
 #include <Standard_ErrorHandler.hxx>
 #endif
 
 using namespace std;
+
+namespace StdMeshers {
 
 Function::Function( const int conv )
 : myConv( conv )
@@ -62,7 +65,7 @@ bool Function::value( const double, double& f ) const
 #endif
       f = pow( 10., f );
     } catch(Standard_Failure) {
-      Handle(Standard_Failure) aFail = Standard_Failure::Caught();
+      // Handle(Standard_Failure) aFail = Standard_Failure::Caught();
       f = 0.0;
       ok = false;
     }
@@ -130,8 +133,8 @@ bool FunctionTable::value( const double t, double& f ) const
 
 double FunctionTable::integral( const int i ) const
 {
-  if( i>=0 && i<myData.size()-1 )
-    return integral( i, myData[2*(i+1)]-myData[2*i] );
+  if ( i >= 0  &&  i < (int)myData.size()-1 )
+    return integral( i, myData[2*(i+1)] - myData[2*i] );
   else
     return 0;
 }
@@ -195,7 +198,7 @@ FunctionExpr::FunctionExpr( const char* str, const int conv )
     myExpr = ExprIntrp_GenExp::Create();
     myExpr->Process( ( Standard_CString )str );
   } catch(Standard_Failure) {
-    Handle(Standard_Failure) aFail = Standard_Failure::Caught();
+    // Handle(Standard_Failure) aFail = Standard_Failure::Caught();
     ok = false;
   }
 
@@ -230,7 +233,7 @@ bool FunctionExpr::value( const double t, double& f ) const
 #endif
     f = myExpr->Expression()->Evaluate( myVars, myValues );
   } catch(Standard_Failure) {
-    Handle(Standard_Failure) aFail = Standard_Failure::Caught();
+    // Handle(Standard_Failure) aFail = Standard_Failure::Caught();
     f = 0.0;
     ok = false;
   }
@@ -344,4 +347,5 @@ bool buildDistribution( const Function& func, const double start, const double e
 
   data[nbSeg] = end;
   return true;
+}
 }

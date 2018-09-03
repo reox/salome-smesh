@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -46,8 +46,6 @@ using namespace std;
 SMESHDS_SubMesh::SMESHDS_SubMesh(SMESHDS_Mesh *parent, int index)
 {
   myParent = parent;
-  myElements.clear();
-  myNodes.clear();
   myIndex = index;
   myUnusedIdNodes = 0;
   myUnusedIdElements = 0;
@@ -65,156 +63,170 @@ SMESHDS_SubMesh::~SMESHDS_SubMesh()
 
 //=======================================================================
 //function : AddElement
-//purpose  : 
+//purpose  :
 //=======================================================================
+
 void SMESHDS_SubMesh::AddElement(const SMDS_MeshElement * ME)
 {
   if (!IsComplexSubmesh())
+  {
+    if ( ME->GetType() == SMDSAbs_Node )
     {
-      if ( ME->GetType() == SMDSAbs_Node )
+      AddNode( static_cast< const SMDS_MeshNode* >( ME ));
+      return;
+    }
+    int oldShapeId = ME->getshapeId();
+    if ( oldShapeId > 0 )
+    {
+      if (oldShapeId != myIndex)
       {
-        AddNode( static_cast< const SMDS_MeshNode* >( ME ));
+        throw SALOME_Exception
+          (LOCALIZED("add element in subshape already belonging to a subshape"));
+      }
+      int idInSubShape = ME->getIdInShape();
+      if (idInSubShape >= 0)
+      {
+        MESSAGE("add element in subshape already belonging to that subshape "
+                << ME->GetID() << " " << oldShapeId << " " << idInSubShape);
+        // check if ok: do nothing if ok
+        if (idInSubShape >= (int)myElements.size())
+        {
+          throw SALOME_Exception(LOCALIZED("out of bounds"));
+        }
+        if (ME != myElements[idInSubShape])
+        {
+          throw SALOME_Exception(LOCALIZED("not the same element"));
+        }
         return;
       }
-      //MESSAGE("in " << myIndex << " AddElement "<< ME->GetID());
-      int oldShapeId = ME->getshapeId();
-      if ( oldShapeId > 0 )
-        {
-          if (oldShapeId != myIndex)
-            {
-              MESSAGE("add element in subshape already belonging to another subshape "
-                << ME->GetID() << " " << oldShapeId << " " << myIndex);
-              throw SALOME_Exception(LOCALIZED("add element in subshape already belonging to a subshape"));
-            }
-          else
-            {
-              int idInSubShape = ME->getIdInShape();
-              if (idInSubShape >= 0)
-                {
-                  MESSAGE("add element in subshape already belonging to that subshape "
-                      << ME->GetID() << " " << oldShapeId << " " << idInSubShape);
-                  // check if ok: do nothing if ok
-                  if (idInSubShape >= myElements.size())
-                    {
-                      MESSAGE("out of bounds " << idInSubShape << " " << myElements.size());
-                      throw SALOME_Exception(LOCALIZED("out of bounds"));
-                    }
-                  if (ME != myElements[idInSubShape])
-                    {
-                      MESSAGE("not the same element");
-                      throw SALOME_Exception(LOCALIZED("not the same element"));
-                    }
-                  MESSAGE("already done, OK, nothing to do");
-                  return;
-                }
-            }
-        }
-
-      SMDS_MeshElement* elem = (SMDS_MeshElement*) (ME);
-      elem->setShapeId(myIndex);
-      elem->setIdInShape(myElements.size());
-      myElements.push_back(ME);
     }
+
+    SMDS_MeshElement* elem = (SMDS_MeshElement*) (ME);
+    elem->setShapeId(myIndex);
+    elem->setIdInShape(myElements.size());
+    myElements.push_back(ME);
+  }
 }
 
 //=======================================================================
 //function : RemoveElement
-//purpose  : 
+//purpose  :
 //=======================================================================
+
 bool SMESHDS_SubMesh::RemoveElement(const SMDS_MeshElement * ME, bool isElemDeleted)
 {
   if (!ME)
-    {
-      MESSAGE("-----------------> Remove Null Element " << isElemDeleted);
-      return false;
-    }
-  //MESSAGE("-----------------> RemoveElement "<< ME->GetID() << " " << isElemDeleted);
+  {
+    return false;
+  }
   if (!IsComplexSubmesh())
+  {
+    if ( ME->getshapeId() != myIndex ) // elem not in a pool can loose it's data already
     {
-      if ( ME->getshapeId() != myIndex )
-        return false;
-      int idInSubShape = ME->getIdInShape();
-      //MESSAGE("in "<< myIndex << " RemoveElement " << ME->GetID() << " " << idInSubShape << " " << myUnusedIdElements);
-      SMDS_MeshElement* elem = (SMDS_MeshElement*) (ME);
-      elem->setShapeId(0);
-      elem->setIdInShape(-1);
-      if ((idInSubShape >= 0) && (idInSubShape < myElements.size()))
-        {
-          myElements[idInSubShape] = 0; // this vector entry is no more used
-          myUnusedIdElements++;
-          return true;
-        }
+      if ( isElemDeleted )
+        for ( size_t i = 0; i < myElements.size(); ++i )
+          if ( myElements[i] == ME )
+          {
+            myElements[i] = 0;
+            ++myUnusedIdElements;
+            return true;
+          }
       return false;
-      //  }
     }
-  MESSAGE("Try to remove an element from a complex submesh ");
+    int idInSubShape = ME->getIdInShape();
+    SMDS_MeshElement* elem = (SMDS_MeshElement*) (ME);
+    elem->setShapeId(0);
+    elem->setIdInShape(-1);
+    if ((idInSubShape >= 0) && (idInSubShape < (int) myElements.size()))
+    {
+      myElements[idInSubShape] = 0; // this vector entry is no more used
+      if ( ++myUnusedIdElements == (int) myElements.size() )
+      {
+        clearVector( myElements );
+        myUnusedIdElements = 0;
+      }
+      return true;
+    }
+    return false;
+  }
   return false;
 }
 
 //=======================================================================
 //function : AddNode
-//purpose  : 
+//purpose  :
 //=======================================================================
+
 void SMESHDS_SubMesh::AddNode(const SMDS_MeshNode * N)
 {
   if ( !IsComplexSubmesh() )
+  {
+    const int idInSubShape = N->getIdInShape();
+    const int shapeId      = N->getshapeId();
+    if ((shapeId > 0) && (idInSubShape >= 0))
     {
-      int idInSubShape = N->getIdInShape();
-      int shapeId = N->getshapeId();
-      if ((shapeId > 0) && (idInSubShape >= 0))
-        {
-//           MESSAGE("========== AddNode already belonging to other subShape " << N->GetID());
-          // OK for vertex nodes
-          throw SALOME_Exception(LOCALIZED("add node in subshape already belonging to a subshape"));
-        }
-      SMDS_MeshNode* node = (SMDS_MeshNode*)(N);
-      node->setShapeId(myIndex);
-      node->setIdInShape(myNodes.size());
-      myNodes.push_back(N);
-      //MESSAGE("in "<< myIndex << " AddNode " << node->GetID());
+      if ( shapeId != myIndex )
+        throw SALOME_Exception
+          (LOCALIZED("a node being in sub-mesh is added to another sub-mesh"));
+      if ( idInSubShape >= (int)myNodes.size() || myNodes[ idInSubShape ] != N )
+        throw SALOME_Exception
+          (LOCALIZED("a node with wrong idInSubShape is re-added to the same sub-mesh"));
+      return; // already in
     }
-  //MESSAGE("try to add node in a complex submesh " << N->GetID());
+    SMDS_MeshNode* node = (SMDS_MeshNode*)(N);
+    node->setShapeId(myIndex);
+    node->setIdInShape(myNodes.size());
+    myNodes.push_back(N);
+  }
 }
 
 //=======================================================================
 //function : RemoveNode
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 bool SMESHDS_SubMesh::RemoveNode(const SMDS_MeshNode * N, bool isNodeDeleted)
 {
   if (!IsComplexSubmesh())
+  {
+    if ( N->getshapeId() != myIndex )
     {
-      // if (!isNodeDeleted) // alive node has valid ID and can be found
-      // {
-      if ( N->getshapeId() != myIndex )
-        return false;
-      int idInSubShape = N->getIdInShape();
-      //int shapeId = N->getshapeId();
-      //MESSAGE("in "<< myIndex << " RemoveNode " << shapeId << " " << idInSubShape << " " << N->GetID());
-      SMDS_MeshNode* node = (SMDS_MeshNode*) (N);
-      node->setShapeId(0);
-      node->setIdInShape(-1);
-      if ((idInSubShape >= 0) && (idInSubShape < myNodes.size()))
-        {
-          myNodes[idInSubShape] = 0; // this vector entry is no more used
-          myUnusedIdNodes++;
-          return true;
-        }
+      if ( isNodeDeleted )
+        for ( size_t i = 0; i < myNodes.size(); ++i )
+          if ( myNodes[i] == N )
+          {
+            myNodes[i] = 0;
+            ++myUnusedIdNodes;
+            return true;
+          }
       return false;
-      // }
     }
-  MESSAGE("Try to remove a node from a complex submesh");
+    int idInSubShape = N->getIdInShape();
+    SMDS_MeshNode* node = (SMDS_MeshNode*) (N);
+    node->setShapeId(0);
+    node->setIdInShape(-1);
+    if ((idInSubShape >= 0) && (idInSubShape < (int) myNodes.size()))
+    {
+      myNodes[idInSubShape] = 0; // this vector entry is no more used
+      if ( ++myUnusedIdNodes == (int) myNodes.size() )
+      {
+        clearVector( myNodes );
+        myUnusedIdNodes = 0;
+      }
+      return true;
+    }
+    return false;
+  }
   return false;
 }
 
 //=======================================================================
 //function : NbElements
-//purpose  : 
+//purpose  :
 //=======================================================================
+
 int SMESHDS_SubMesh::NbElements() const
 {
-  //MESSAGE(this << " NbElements " << IsComplexSubmesh() << " " << myElements.size() - myUnusedIdElements);
   if ( !IsComplexSubmesh() )
     return myElements.size() - myUnusedIdElements;
 
@@ -228,12 +240,11 @@ int SMESHDS_SubMesh::NbElements() const
 
 //=======================================================================
 //function : NbNodes
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 int SMESHDS_SubMesh::NbNodes() const
 {
-  //MESSAGE(this << " NbNodes " << IsComplexSubmesh() << " " << myNodes.size() - myUnusedIdNodes);
   if ( !IsComplexSubmesh() )
     return myNodes.size() - myUnusedIdNodes;
 
@@ -246,38 +257,44 @@ int SMESHDS_SubMesh::NbNodes() const
 }
 
 /*!
- * template class used for iteration on submesh elements. Interface of iterator remains
- * unchanged after redesign of SMDS to avoid modification everywhere in SMESH.
- * instances are stored in shared_ptr for automatic destruction.
- * Container is copied for iteration, because original can be modified
- * by addition of elements, for instance, and then reallocated (vector)
+ * Template class used for iteration on vector of elements which can resize
+ * during iteration. The iterator returns only elements present upon its creation.
  */
 template <class ELEM, typename TSET> class MySetIterator : public SMDS_Iterator<ELEM>
 {
 protected:
-  typename TSET::const_iterator _it, _end;
-  TSET _table;
+  int _iCur, _iEnd, _iDelta;
+  const TSET& _table;
 public:
-  MySetIterator(const TSET& table)
+  MySetIterator(const TSET& table, bool reverse): _table( table )
   {
-    _table = table;
-    _it = _table.begin();
-    _end = _table.end();
-    while ((_it != _end) && (*_it == 0))
-      _it++;
+    if ( reverse )
+    {
+      _iCur = _table.size()-1;
+      _iEnd = -1;
+      _iDelta = -1;
+    }
+    else
+    {
+      _iCur = 0;
+      _iEnd = _table.size();
+      _iDelta = 1;
+    }
+    if ( more() && !_table[ _iCur ])
+      next();
   }
 
   virtual bool more()
   {
-    while ((_it != _end) && (*_it == 0))
-      _it++;
-    return (_it != _end);
+    return ( _iEnd - _iCur ) * _iDelta > 0;
   }
 
   virtual ELEM next()
   {
-    ELEM e = *_it;
-    _it++;
+    ELEM e = more() ? _table[ _iCur ] : 0;
+    _iCur += _iDelta;
+    while ( more() && !_table[ _iCur ])
+      _iCur += _iDelta;
     return e;
   }
 };
@@ -288,10 +305,10 @@ public:
 
 template<typename VALUE> class MyIterator : public SMDS_Iterator<VALUE>
 {
- public:
+public:
   MyIterator (const set<const SMESHDS_SubMesh*>& theSubMeshes)
-    : mySubIt( theSubMeshes.begin() ), mySubEnd( theSubMeshes.end() ), myMore(false)
-    {}
+    : myMore(false), mySubIt( theSubMeshes.begin() ), mySubEnd( theSubMeshes.end() )
+  {}
   bool more()
   {
     while (( !myElemIt.get() || !myElemIt->more() ) && mySubIt != mySubEnd)
@@ -309,11 +326,11 @@ template<typename VALUE> class MyIterator : public SMDS_Iterator<VALUE>
       elem = myElemIt->next();
     return elem;
   }
- protected:
+protected:
   virtual boost::shared_ptr< SMDS_Iterator<VALUE> >
-    getElements(const SMESHDS_SubMesh*) const = 0;
+  getElements(const SMESHDS_SubMesh*) const = 0;
 
- private:
+private:
   bool                                        myMore;
   set<const SMESHDS_SubMesh*>::const_iterator mySubIt, mySubEnd;
   boost::shared_ptr< SMDS_Iterator<VALUE> >   myElemIt;
@@ -325,7 +342,7 @@ template<typename VALUE> class MyIterator : public SMDS_Iterator<VALUE>
 
 class MyElemIterator: public MyIterator<const SMDS_MeshElement*>
 {
- public:
+public:
   MyElemIterator (const set<const SMESHDS_SubMesh*>& theSubMeshes)
     :MyIterator<const SMDS_MeshElement*>( theSubMeshes ) {}
   SMDS_ElemIteratorPtr getElements(const SMESHDS_SubMesh* theSubMesh) const
@@ -338,36 +355,39 @@ class MyElemIterator: public MyIterator<const SMDS_MeshElement*>
 
 class MyNodeIterator: public MyIterator<const SMDS_MeshNode*>
 {
- public:
+public:
   MyNodeIterator (const set<const SMESHDS_SubMesh*>& theSubMeshes)
     :MyIterator<const SMDS_MeshNode*>( theSubMeshes ) {}
   SMDS_NodeIteratorPtr getElements(const SMESHDS_SubMesh* theSubMesh) const
   { return theSubMesh->GetNodes(); }
 };
-  
+
 //=======================================================================
 //function : GetElements
-//purpose  : 
+//purpose  :
 //=======================================================================
 
-SMDS_ElemIteratorPtr SMESHDS_SubMesh::GetElements() const
+SMDS_ElemIteratorPtr SMESHDS_SubMesh::GetElements( bool reverse ) const
 {
   if ( IsComplexSubmesh() )
     return SMDS_ElemIteratorPtr( new MyElemIterator( mySubMeshes ));
-  return SMDS_ElemIteratorPtr(new MySetIterator<const SMDS_MeshElement*, std::vector<const SMDS_MeshElement*> >(myElements));
+
+  typedef MySetIterator< const SMDS_MeshElement*, std::vector<const SMDS_MeshElement*> > TIter;
+  return SMDS_ElemIteratorPtr( new TIter( myElements, reverse ));
 }
 
 //=======================================================================
 //function : GetNodes
-//purpose  : 
+//purpose  :
 //=======================================================================
 
-SMDS_NodeIteratorPtr SMESHDS_SubMesh::GetNodes() const
+SMDS_NodeIteratorPtr SMESHDS_SubMesh::GetNodes( bool reverse ) const
 {
   if ( IsComplexSubmesh() )
     return SMDS_NodeIteratorPtr( new MyNodeIterator( mySubMeshes ));
 
-  return SMDS_NodeIteratorPtr(new MySetIterator<const SMDS_MeshNode*, std::vector<const SMDS_MeshNode*> >(myNodes));
+  typedef MySetIterator< const SMDS_MeshNode*, std::vector<const SMDS_MeshNode*> > TIter;
+  return SMDS_NodeIteratorPtr( new TIter( myNodes, reverse ));
 }
 
 //=======================================================================
@@ -382,35 +402,58 @@ bool SMESHDS_SubMesh::Contains(const SMDS_MeshElement * ME) const
   if (!ME)
     return false;
 
-  if (IsComplexSubmesh())
-    {
-      set<const SMESHDS_SubMesh*>::const_iterator aSubIt = mySubMeshes.begin();
-      for (; aSubIt != mySubMeshes.end(); aSubIt++)
-        if ((*aSubIt)->Contains(ME))
-          return true;
-      return false;
-    }
+  if ( IsComplexSubmesh() )
+  {
+    set<const SMESHDS_SubMesh*>::const_iterator aSubIt = mySubMeshes.begin();
+    for (; aSubIt != mySubMeshes.end(); aSubIt++)
+      if ((*aSubIt)->Contains(ME))
+        return true;
+    return false;
+  }
 
   if (ME->GetType() == SMDSAbs_Node)
-    {
-      int idInShape = ME->getIdInShape();
-      if ((idInShape >= 0) && (idInShape < myNodes.size()))
-        if (myNodes[idInShape] == ME)
-          return true;
-    }
+  {
+    int idInShape = ME->getIdInShape();
+    if ((idInShape >= 0) && (idInShape < (int) myNodes.size()))
+      if (myNodes[idInShape] == ME)
+        return true;
+  }
   else
-    {
-      int idInShape = ME->getIdInShape();
-      if ((idInShape >= 0) && (idInShape < myElements.size()))
-        if (myElements[idInShape] == ME)
-          return true;
-    }
+  {
+    int idInShape = ME->getIdInShape();
+    if ((idInShape >= 0) && (idInShape < (int) myElements.size()))
+      if (myElements[idInShape] == ME)
+        return true;
+  }
+  return false;
+}
+
+//=======================================================================
+//function : IsQuadratic
+//purpose  : Return true if my 1st element is quadratic
+//=======================================================================
+
+bool SMESHDS_SubMesh::IsQuadratic() const
+{
+  if ( IsComplexSubmesh() )
+  {
+    set<const SMESHDS_SubMesh*>::const_iterator aSubIt = mySubMeshes.begin();
+    for (; aSubIt != mySubMeshes.end(); aSubIt++)
+      if ((*aSubIt)->IsQuadratic())
+        return true;
+    return false;
+  }
+
+  for ( size_t i = 0; i < myElements.size(); ++i )
+    if ( myElements[i] )
+      return myElements[i]->IsQuadratic();
+
   return false;
 }
 
 //=======================================================================
 //function : AddSubMesh
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 void SMESHDS_SubMesh::AddSubMesh( const SMESHDS_SubMesh* theSubMesh )
@@ -441,7 +484,7 @@ void SMESHDS_SubMesh::RemoveAllSubmeshes()
 
 //=======================================================================
 //function : ContainsSubMesh
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 bool SMESHDS_SubMesh::ContainsSubMesh( const SMESHDS_SubMesh* theSubMesh ) const
@@ -451,7 +494,7 @@ bool SMESHDS_SubMesh::ContainsSubMesh( const SMESHDS_SubMesh* theSubMesh ) const
 
 //=======================================================================
 //function : GetSubMeshIterator
-//purpose  : 
+//purpose  :
 //=======================================================================
 
 SMESHDS_SubMeshIteratorPtr SMESHDS_SubMesh::GetSubMeshIterator() const
@@ -469,14 +512,35 @@ SMESHDS_SubMeshIteratorPtr SMESHDS_SubMesh::GetSubMeshIterator() const
 
 void SMESHDS_SubMesh::Clear()
 {
-  myElements.clear();
-  myNodes.clear();
+  if ( myParent && myParent->NbNodes() > 0 )
+  {
+    for ( size_t i = 0; i < myElements.size(); ++i )
+    {
+      if ( myElements[i] &&
+           myElements[i]->GetID() > 0 &&
+           myElements[i] == myParent->FindElement( myElements[i]->GetID() )) // not deleted
+        const_cast< SMDS_MeshElement* >( myElements[i] )->setShapeId( 0 );
+    }
+    for ( size_t i = 0; i < myNodes.size(); ++i )
+    {
+      if ( myNodes[i] &&
+           myNodes[i]->GetID() > 0 &&
+           myNodes[i] == myParent->FindNode( myNodes[i]->GetID() )) // not deleted
+        const_cast< SMDS_MeshNode* >( myNodes[i] )->setShapeId( 0 );
+    }
+  }
+
+  clearVector( myElements );
+  clearVector( myNodes );
   myUnusedIdNodes = 0;
   myUnusedIdElements = 0;
-  SMESHDS_SubMeshIteratorPtr sub = GetSubMeshIterator();
-  while ( sub->more() ) {
-    if ( SMESHDS_SubMesh* sm = (SMESHDS_SubMesh*) sub->next())
-      sm->Clear();
+  if ( NbSubMeshes() > 0 )
+  {
+    SMESHDS_SubMeshIteratorPtr sub = GetSubMeshIterator();
+    while ( sub->more() ) {
+      if ( SMESHDS_SubMesh* sm = (SMESHDS_SubMesh*) sub->next())
+        sm->Clear();
+    }
   }
 }
 
@@ -484,53 +548,66 @@ int SMESHDS_SubMesh::getSize()
 {
   int c = NbNodes();
   int d = NbElements();
-  //cerr << "SMESHDS_SubMesh::NbNodes " << c << endl;
-  //cerr << "SMESHDS_SubMesh::NbElements " << d << endl;
   return c+d;
 }
 
 void SMESHDS_SubMesh::compactList()
 {
-  //MESSAGE("compactList old: nodes " << myNodes.size() << " elements " << myElements.size());
-  //stringstream a;
-  //stringstream b;
-  //stringstream c;
-  //stringstream d;
-
-  std::vector<const SMDS_MeshElement*> newElems;
-  newElems.clear();
-  for (int i = 0; i < myElements.size(); i++)
-    if (myElements[i])
+  if ( myUnusedIdElements > 0 )
+  {
+    std::vector<const SMDS_MeshElement*> newElems;
+    newElems.reserve( myElements.size() - myUnusedIdElements );
+    for ( size_t i = 0; i < myElements.size(); i++)
+      if ( myElements[i] )
       {
         SMDS_MeshElement* elem = (SMDS_MeshElement*)myElements[i];
-        elem->setIdInShape(newElems.size());
-        newElems.push_back(elem);
-        //a << elem->GetID() << " ";
-        //b << elem->GetID() << " ";
+        elem->setIdInShape( newElems.size() );
+        newElems.push_back( elem );
       }
-    //else
-    //  a << "_ ";
-  myElements.swap(newElems);
-  myUnusedIdElements = 0;
-  //MESSAGE("in " << myIndex << " oldElems " << a.str());
-  //MESSAGE("in " << myIndex << " newElems " << b.str());
+    myElements.swap(newElems);
+    myUnusedIdElements = 0;
+  }
+  else
+  {
+    std::vector<const SMDS_MeshElement*>( myElements ).swap( myElements );
+  }
 
-  std::vector<const SMDS_MeshNode*> newNodes;
-  newNodes.clear();
-  for (int i = 0; i < myNodes.size(); i++)
-    if (myNodes[i])
+  if ( myUnusedIdNodes > 0 )
+  {
+    std::vector<const SMDS_MeshNode*> newNodes;
+    newNodes.reserve( myNodes.size() - myUnusedIdNodes );
+    for ( size_t i = 0; i < myNodes.size(); i++ )
+      if ( myNodes[i] )
       {
         SMDS_MeshNode* node = (SMDS_MeshNode*)myNodes[i];
-        node->setIdInShape(newNodes.size());
-        newNodes.push_back(node);
-        //c << node->GetID() << " ";
-        //d << node->GetID() << " ";
+        node->setIdInShape( newNodes.size() );
+        newNodes.push_back( node );
       }
-    //else
-    //  c << "_ ";
-  myNodes.swap(newNodes);
-  myUnusedIdNodes = 0;
-  //MESSAGE("in " << myIndex << " oldNodes " << c.str());
-  //MESSAGE("in " << myIndex << " newNodes " << d.str());
-  //MESSAGE("compactList new: nodes " << myNodes.size() << " elements " << myElements.size());
+    myNodes.swap(newNodes);
+    myUnusedIdNodes = 0;
+  }
+  else
+  {
+    std::vector<const SMDS_MeshNode*>( myNodes ).swap( myNodes );
+  }
+}
+
+//=======================================================================
+//function : GetElement
+//purpose  : Return an element by its IdInShape
+//=======================================================================
+
+const SMDS_MeshElement* SMESHDS_SubMesh::GetElement( size_t idInShape ) const
+{
+  return ( !IsComplexSubmesh() && idInShape < myElements.size() ) ? myElements[idInShape] : 0;
+}
+
+//=======================================================================
+//function : GetElement
+//purpose  : Return a node by its IdInShape
+//=======================================================================
+
+const SMDS_MeshNode* SMESHDS_SubMesh::GetNode( size_t idInShape ) const
+{
+  return ( !IsComplexSubmesh() && idInShape < myNodes.size() ) ? myNodes[idInShape] : 0;
 }

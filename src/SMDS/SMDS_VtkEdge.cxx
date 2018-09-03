@@ -1,9 +1,9 @@
-// Copyright (C) 2010-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2010-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -33,7 +33,7 @@ SMDS_VtkEdge::SMDS_VtkEdge()
 {
 }
 
-SMDS_VtkEdge::SMDS_VtkEdge(std::vector<vtkIdType> nodeIds, SMDS_Mesh* mesh)
+SMDS_VtkEdge::SMDS_VtkEdge(std::vector<vtkIdType>& nodeIds, SMDS_Mesh* mesh)
 {
   init(nodeIds, mesh);
 }
@@ -42,17 +42,13 @@ SMDS_VtkEdge::~SMDS_VtkEdge()
 {
 }
 
-void SMDS_VtkEdge::init(std::vector<vtkIdType> nodeIds, SMDS_Mesh* mesh)
+void SMDS_VtkEdge::init(std::vector<vtkIdType>& nodeIds, SMDS_Mesh* mesh)
 {
   SMDS_MeshEdge::init();
-  vtkUnstructuredGrid* grid = mesh->getGrid();
   myMeshId = mesh->getMeshId();
-  vtkIdType aType = VTK_LINE;
-  if (nodeIds.size() == 3)
-    aType = VTK_QUADRATIC_EDGE;
-  myVtkID = grid->InsertNextLinkedCell(aType, nodeIds.size(), &nodeIds[0]);
+  vtkIdType aType = ( nodeIds.size() == 3 ) ? VTK_QUADRATIC_EDGE : VTK_LINE;
+  myVtkID = mesh->getGrid()->InsertNextLinkedCell(aType, nodeIds.size(), &nodeIds[0]);
   mesh->setMyModified();
-  //MESSAGE("SMDS_VtkEdge::init myVtkID " << myVtkID);
 }
 
 bool SMDS_VtkEdge::ChangeNodes(const SMDS_MeshNode * node1, const SMDS_MeshNode * node2)
@@ -69,14 +65,14 @@ bool SMDS_VtkEdge::ChangeNodes(const SMDS_MeshNode* nodes[], const int nbNodes)
   vtkIdType* pts = 0;
   grid->GetCellPoints(myVtkID, npts, pts);
   if (nbNodes != npts)
-    {
-      MESSAGE("ChangeNodes problem: not the same number of nodes " << npts << " -> " << nbNodes);
-      return false;
-    }
+  {
+    MESSAGE("ChangeNodes problem: not the same number of nodes " << npts << " -> " << nbNodes);
+    return false;
+  }
   for (int i = 0; i < nbNodes; i++)
-    {
-      pts[i] = nodes[i]->getVtkId();
-    }
+  {
+    pts[i] = nodes[i]->getVtkId();
+  }
   SMDS_Mesh::_meshList[myMeshId]->setMyModified();
   return true;
 }
@@ -87,7 +83,6 @@ bool SMDS_VtkEdge::IsMediumNode(const SMDS_MeshNode* node) const
   vtkIdType npts = 0;
   vtkIdType* pts = 0;
   grid->GetCellPoints(myVtkID, npts, pts);
-  //MESSAGE("IsMediumNode " << npts  << " " << (node->getVtkId() == pts[npts-1]));
   return ((npts == 3) && (node->getVtkId() == pts[2]));
 }
 
@@ -99,9 +94,10 @@ void SMDS_VtkEdge::Print(std::ostream & OS) const
 int SMDS_VtkEdge::NbNodes() const
 {
   vtkUnstructuredGrid* grid = SMDS_Mesh::_meshList[myMeshId]->getGrid();
-  int nbPoints = grid->GetCell(myVtkID)->GetNumberOfPoints();
-  assert(nbPoints >= 2);
-  return nbPoints;
+  vtkIdType *pts, npts;
+  grid->GetCellPoints( myVtkID, npts, pts );
+  assert(npts >= 2);
+  return npts;
 }
 
 int SMDS_VtkEdge::NbEdges() const
@@ -155,18 +151,17 @@ SMDS_ElemIteratorPtr SMDS_VtkEdge::elementsIterator(SMDSAbs_ElementType type) co
     case SMDSAbs_Node:
       return SMDS_ElemIteratorPtr(new SMDS_VtkCellIterator(SMDS_Mesh::_meshList[myMeshId], myVtkID, GetEntityType()));
     default:
-      MESSAGE("ERROR : Iterator not implemented")
-      ;
+      MESSAGE("ERROR : Iterator not implemented");
       return SMDS_ElemIteratorPtr((SMDS_ElemIterator*) NULL);
   }
 }
 
-SMDS_ElemIteratorPtr SMDS_VtkEdge::nodesIteratorToUNV() const
+SMDS_NodeIteratorPtr SMDS_VtkEdge::nodesIteratorToUNV() const
 {
-  return SMDS_ElemIteratorPtr(new SMDS_VtkCellIteratorToUNV(SMDS_Mesh::_meshList[myMeshId], myVtkID, GetEntityType()));
+  return SMDS_NodeIteratorPtr(new SMDS_VtkCellIteratorToUNV(SMDS_Mesh::_meshList[myMeshId], myVtkID, GetEntityType()));
 }
 
-SMDS_ElemIteratorPtr SMDS_VtkEdge::interlacedNodesElemIterator() const
+SMDS_NodeIteratorPtr SMDS_VtkEdge::interlacedNodesIterator() const
 {
-  return SMDS_ElemIteratorPtr(new SMDS_VtkCellIteratorToUNV(SMDS_Mesh::_meshList[myMeshId], myVtkID, GetEntityType()));
+  return nodesIteratorToUNV();
 }

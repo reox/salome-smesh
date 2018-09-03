@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,19 +24,25 @@
 //  File   : DriverMED_W_SMESHDS_Mesh.cxx
 //  Module : SMESH
 //
-#include <sstream>
 
 #include "DriverMED_W_SMESHDS_Mesh.h"
-#include "DriverMED_Family.h"
 
-#include "SMESHDS_Mesh.hxx"
+#include "DriverMED_Family.h"
+#include "MED_Factory.hxx"
+#include "MED_Utilities.hxx"
+#include "SMDS_IteratorOnIterators.hxx"
 #include "SMDS_MeshElement.hxx"
 #include "SMDS_MeshNode.hxx"
 #include "SMDS_PolyhedralVolumeOfNodes.hxx"
+#include "SMDS_SetIterator.hxx"
+#include "SMESHDS_Mesh.hxx"
 
-#include "utilities.h"
+#include <BRep_Tool.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 
-#include "MED_Utilities.hxx"
+#include <utilities.h>
+
 
 #define _EDF_NODE_IDS_
 //#define _ELEMENTS_BY_DIM_
@@ -46,23 +52,29 @@ using namespace MED;
 
 
 DriverMED_W_SMESHDS_Mesh::DriverMED_W_SMESHDS_Mesh():
+  myMedVersion(MED::eV2_2),
   myAllSubMeshes (false),
   myDoGroupOfNodes (false),
   myDoGroupOfEdges (false),
   myDoGroupOfFaces (false),
-  myDoGroupOfVolumes (false)
+  myDoGroupOfVolumes (false),
+  myDoGroupOf0DElems(false),
+  myDoGroupOfBalls(false),
+  myAutoDimension(false),
+  myAddODOnVertices(false),
+  myDoAllInGroups(false)
 {}
 
 void DriverMED_W_SMESHDS_Mesh::SetFile(const std::string& theFileName, 
-                                       MED::EVersion theId)
+                                       MED::EVersion      theId)
 {
-  myMed = CrWrapper(theFileName,theId);
   Driver_SMESHDS_Mesh::SetFile(theFileName);
+  myMedVersion = theId;
 }
 
 void DriverMED_W_SMESHDS_Mesh::SetFile(const std::string& theFileName)
 {
-  return SetFile(theFileName,MED::eV2_2);
+  Driver_SMESHDS_Mesh::SetFile(theFileName);
 }
 
 string DriverMED_W_SMESHDS_Mesh::GetVersionString(const MED::EVersion theVersion, int theNbDigits)
@@ -95,7 +107,7 @@ void DriverMED_W_SMESHDS_Mesh::AddAllSubMeshes()
 
 void DriverMED_W_SMESHDS_Mesh::AddSubMesh(SMESHDS_SubMesh* theSubMesh, int theID)
 {
-  mySubMeshes[theID] = theSubMesh;
+  mySubMeshes.push_back( theSubMesh );
 }
 
 void DriverMED_W_SMESHDS_Mesh::AddGroupOfNodes()
@@ -118,7 +130,34 @@ void DriverMED_W_SMESHDS_Mesh::AddGroupOfVolumes()
   myDoGroupOfVolumes = true;
 }
 
-namespace{
+void DriverMED_W_SMESHDS_Mesh::AddGroupOf0DElems()
+{
+  myDoGroupOf0DElems = true;
+}
+
+void DriverMED_W_SMESHDS_Mesh::AddGroupOfBalls()
+{
+  myDoGroupOfBalls = true;
+}
+
+//================================================================================
+/*!
+ * \brief Set up a flag to add all elements not belonging to any group to
+ *        some auxiliary group. This is needed for SMESH -> SAUVE -> SMESH conversion,
+ *        which since PAL0023285 reads only SAUVE elements belonging to any group,
+ *        and hence can lose some elements. That auxiliary group is ignored while
+ *        reading a MED file.
+ */
+//================================================================================
+
+void DriverMED_W_SMESHDS_Mesh::AddAllToGroup()
+{
+  myDoAllInGroups = true;
+}
+
+
+namespace
+{
   typedef double (SMDS_MeshNode::* TGetCoord)() const;
   typedef const char* TName;
   typedef const char* TUnit;
@@ -246,7 +285,6 @@ namespace{
                           const SMDSAbs_ElementType   anElemType)
   {
     anElemFamMap.Clear();
-    //anElemFamMap.clear();
     list<DriverMED_FamilyPtr>::iterator aFamsIter = aFamilies.begin();
     while ( aFamsIter != aFamilies.end() )
     {
@@ -255,12 +293,11 @@ namespace{
       }
       else {
         int aFamId = (*aFamsIter)->GetId();
-        const set<const SMDS_MeshElement *>& anElems = (*aFamsIter)->GetElements();
-        set<const SMDS_MeshElement *>::const_iterator anElemsIter = anElems.begin();
+        const ElementsSet&              anElems = (*aFamsIter)->GetElements();
+        ElementsSet::const_iterator anElemsIter = anElems.begin();
         for (; anElemsIter != anElems.end(); anElemsIter++)
         {
           anElemFamMap.Bind( (Standard_Address)*anElemsIter, aFamId );
-          //anElemFamMap[*anElemsIter] = aFamId;
         }
         // remove a family from the list
         aFamilies.erase( aFamsIter++ );
@@ -280,10 +317,22 @@ namespace{
   {
     if ( anElemFamMap.IsBound( (Standard_Address) anElement ))
       return anElemFamMap( (Standard_Address) anElement );
-//     TElemFamilyMap::iterator elem_famNum = anElemFamMap.find( anElement );
-//     if ( elem_famNum != anElemFamMap.end() )
-//       return elem_famNum->second;
+
     return aDefaultFamilyId;
+  }
+
+  //================================================================================
+  /*!
+   * \brief Returns iterator on sub-meshes
+   */
+  //================================================================================
+
+  SMESHDS_SubMeshIteratorPtr getIterator( std::vector<SMESHDS_SubMesh*>& mySubMeshes )
+  {
+    return SMESHDS_SubMeshIteratorPtr
+      ( new SMDS_SetIterator
+        < const SMESHDS_SubMesh*, std::vector< SMESHDS_SubMesh* >::iterator >( mySubMeshes.begin(),
+                                                                               mySubMeshes.end() ));
   }
 }
 
@@ -295,7 +344,7 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
     return DRS_FAIL;
   }
   try {
-    MESSAGE("Perform - myFile : "<<myFile);
+    //MESSAGE("Perform - myFile : "<<myFile);
 
     // Creating the MED mesh for corresponding SMDS structure
     //-------------------------------------------------------
@@ -309,12 +358,22 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
     }
 
     // Mesh dimension definition
-    TInt aSpaceDimension;
+
+    TInt aMeshDimension = 0;
+    if ( myMesh->NbEdges() > 0 )
+      aMeshDimension = 1;
+    if ( myMesh->NbFaces() > 0 )
+      aMeshDimension = 2;
+    if ( myMesh->NbVolumes() > 0 )
+      aMeshDimension = 3;
+
+    TInt aSpaceDimension = 3;
     TCoordHelperPtr aCoordHelperPtr;
-    {  
+    {
       bool anIsXDimension = false;
       bool anIsYDimension = false;
       bool anIsZDimension = false;
+      if ( myAutoDimension && aMeshDimension < 3 )
       {
         SMDS_NodeIteratorPtr aNodesIter = myMesh->nodesIterator();
         double aBounds[6];
@@ -331,17 +390,34 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
           
           aBounds[2] = min(aBounds[2],aNode->Y());
           aBounds[3] = max(aBounds[3],aNode->Y());
-          
+
           aBounds[4] = min(aBounds[4],aNode->Z());
           aBounds[5] = max(aBounds[5],aNode->Z());
         }
 
         double EPS = 1.0E-7;
+        TopoDS_Shape mainShape = myMesh->ShapeToMesh();
+        bool    hasShapeToMesh = ( myMesh->SubMeshIndices().size() > 1 );
+        if ( !mainShape.IsNull() && hasShapeToMesh )
+        {
+          // define EPS by max tolerance of the mainShape (IPAL53097)
+          TopExp_Explorer subShape;
+          for ( subShape.Init( mainShape, TopAbs_FACE ); subShape.More(); subShape.Next() ) {
+            EPS = Max( EPS, BRep_Tool::Tolerance( TopoDS::Face( subShape.Current() )));
+          }
+          for ( subShape.Init( mainShape, TopAbs_EDGE ); subShape.More(); subShape.Next() ) {
+            EPS = Max( EPS, BRep_Tool::Tolerance( TopoDS::Edge( subShape.Current() )));
+          }
+          for ( subShape.Init( mainShape, TopAbs_VERTEX ); subShape.More(); subShape.Next() ) {
+            EPS = Max( EPS, BRep_Tool::Tolerance( TopoDS::Vertex( subShape.Current() )));
+          }
+          EPS *= 2.;
+        }
         anIsXDimension = (aBounds[1] - aBounds[0]) + abs(aBounds[1]) + abs(aBounds[0]) > EPS;
         anIsYDimension = (aBounds[3] - aBounds[2]) + abs(aBounds[3]) + abs(aBounds[2]) > EPS;
         anIsZDimension = (aBounds[5] - aBounds[4]) + abs(aBounds[5]) + abs(aBounds[4]) > EPS;
-        aSpaceDimension = anIsXDimension + anIsYDimension + anIsZDimension;
-        if(!aSpaceDimension)
+        aSpaceDimension = Max( aMeshDimension, anIsXDimension + anIsYDimension + anIsZDimension );
+        if ( !aSpaceDimension )
           aSpaceDimension = 3;
         // PAL16857(SMESH not conform to the MED convention):
         if ( aSpaceDimension == 2 && anIsZDimension ) // 2D only if mesh is in XOY plane
@@ -358,7 +434,7 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
       }
 
       SMDS_NodeIteratorPtr aNodesIter = myMesh->nodesIterator(/*idInceasingOrder=*/true);
-      switch(aSpaceDimension){
+      switch ( aSpaceDimension ) {
       case 3:
         aCoordHelperPtr.reset(new TCoordHelper(aNodesIter,aXYZGetCoord,aXYZName));
         break;
@@ -380,41 +456,42 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
         break;
       }
     }
-    TInt aMeshDimension = 0;
-    if ( myMesh->NbEdges() > 0 )
-      aMeshDimension = 1;
-    if ( myMesh->NbFaces() > 0 )
-      aMeshDimension = 2;
-    if ( myMesh->NbVolumes() > 0 )
-      aMeshDimension = 3;
-    
+
+    MED::PWrapper myMed = CrWrapper(myFile,myMedVersion);
     PMeshInfo aMeshInfo = myMed->CrMeshInfo(aMeshDimension,aSpaceDimension,aMeshName);
-    MESSAGE("Add - aMeshName : "<<aMeshName<<"; "<<aMeshInfo->GetName());
+    //MESSAGE("Add - aMeshName : "<<aMeshName<<"; "<<aMeshInfo->GetName());
     myMed->SetMeshInfo(aMeshInfo);
 
     // Storing SMDS groups and sub-meshes as med families
     //----------------------------------------------------
-    int myNodesDefaultFamilyId   = 0;
+    int myNodesDefaultFamilyId      = 0;
     int my0DElementsDefaultFamilyId = 0;
-    int myEdgesDefaultFamilyId   = 0;
-    int myFacesDefaultFamilyId   = 0;
-    int myVolumesDefaultFamilyId = 0;
-    int nbNodes   = myMesh->NbNodes();
-    //int nb0DElements = myMesh->Nb0DElements();
-    int nbEdges   = myMesh->NbEdges();
-    int nbFaces   = myMesh->NbFaces();
-    int nbVolumes = myMesh->NbVolumes();
-    if (myDoGroupOfNodes && nbNodes)
-      myNodesDefaultFamilyId = REST_NODES_FAMILY;
-    if (myDoGroupOfEdges && nbEdges)
-      myEdgesDefaultFamilyId = REST_EDGES_FAMILY;
-    if (myDoGroupOfFaces && nbFaces)
-      myFacesDefaultFamilyId = REST_FACES_FAMILY;
-    if (myDoGroupOfVolumes && nbVolumes)
-      myVolumesDefaultFamilyId = REST_VOLUMES_FAMILY;
+    int myBallsDefaultFamilyId      = 0;
+    int myEdgesDefaultFamilyId      = 0;
+    int myFacesDefaultFamilyId      = 0;
+    int myVolumesDefaultFamilyId    = 0;
+    int nbNodes      = myMesh->NbNodes();
+    int nb0DElements = myMesh->Nb0DElements();
+    int nbBalls      = myMesh->NbBalls();
+    int nbEdges      = myMesh->NbEdges();
+    int nbFaces      = myMesh->NbFaces();
+    int nbVolumes    = myMesh->NbVolumes();
+    if (myDoGroupOfNodes)   myNodesDefaultFamilyId      = REST_NODES_FAMILY;
+    if (myDoGroupOfEdges)   myEdgesDefaultFamilyId      = REST_EDGES_FAMILY;
+    if (myDoGroupOfFaces)   myFacesDefaultFamilyId      = REST_FACES_FAMILY;
+    if (myDoGroupOfVolumes) myVolumesDefaultFamilyId    = REST_VOLUMES_FAMILY;
+    if (myDoGroupOf0DElems) my0DElementsDefaultFamilyId = REST_0DELEM_FAMILY;
+    if (myDoGroupOfBalls)   myBallsDefaultFamilyId      = REST_BALL_FAMILY;
+    if (myDoAllInGroups )
+    {
+      if (!myDoGroupOfEdges)   myEdgesDefaultFamilyId      = NIG_EDGES_FAMILY   ;
+      if (!myDoGroupOfFaces)   myFacesDefaultFamilyId      = NIG_FACES_FAMILY   ;
+      if (!myDoGroupOfVolumes) myVolumesDefaultFamilyId    = NIG_VOLS_FAMILY    ;
+      if (!myDoGroupOf0DElems) my0DElementsDefaultFamilyId = NIG_0DELEM_FAMILY  ;
+      if (!myDoGroupOfBalls)   myBallsDefaultFamilyId      = NIG_BALL_FAMILY    ;
+    }
 
-    MESSAGE("Perform - aFamilyInfo");
-    //cout << " DriverMED_Family::MakeFamilies() " << endl;
+    //MESSAGE("Perform - aFamilyInfo");
     list<DriverMED_FamilyPtr> aFamilies;
     if (myAllSubMeshes) {
       aFamilies = DriverMED_Family::MakeFamilies
@@ -422,16 +499,22 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
          myDoGroupOfNodes   && nbNodes,
          myDoGroupOfEdges   && nbEdges,
          myDoGroupOfFaces   && nbFaces,
-         myDoGroupOfVolumes && nbVolumes);
-    } else {
+         myDoGroupOfVolumes && nbVolumes,
+         myDoGroupOf0DElems && nb0DElements,
+         myDoGroupOfBalls   && nbBalls,
+         myDoAllInGroups);
+    }
+    else {
       aFamilies = DriverMED_Family::MakeFamilies
-        (mySubMeshes, myGroups,
+        (getIterator( mySubMeshes ), myGroups,
          myDoGroupOfNodes   && nbNodes,
          myDoGroupOfEdges   && nbEdges,
          myDoGroupOfFaces   && nbFaces,
-         myDoGroupOfVolumes && nbVolumes);
+         myDoGroupOfVolumes && nbVolumes,
+         myDoGroupOf0DElems && nb0DElements,
+         myDoGroupOfBalls   && nbBalls,
+         myDoAllInGroups);
     }
-    //cout << " myMed->SetFamilyInfo() " << endl;
     list<DriverMED_FamilyPtr>::iterator aFamsIter;
     for (aFamsIter = aFamilies.begin(); aFamsIter != aFamilies.end(); aFamsIter++)
     {
@@ -452,11 +535,9 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
     const EConnectivite theConnMode    = eNOD;
 
     TInt aNbNodes = myMesh->NbNodes();
-    //cout << " myMed->CrNodeInfo() aNbNodes = " << aNbNodes << endl;
     PNodeInfo aNodeInfo = myMed->CrNodeInfo(aMeshInfo, aNbNodes,
                                             theMode, theSystem, theIsElemNum, theIsElemNames);
 
-    //cout << " fillElemFamilyMap( SMDSAbs_Node )" << endl;
     // find family numbers for nodes
     TElemFamilyMap anElemFamMap;
     fillElemFamilyMap( anElemFamMap, aFamilies, SMDSAbs_Node );
@@ -472,7 +553,7 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
       int aNodeID = aCoordHelperPtr->GetID();
       aNodeInfo->SetElemNum( iNode, aNodeID );
 #ifdef _EDF_NODE_IDS_
-      aNodeIdMap[aNodeID] = iNode+1;
+      aNodeIdMap.insert( aNodeIdMap.end(), make_pair( aNodeID, iNode+1 ));
 #endif
       // family number
       const SMDS_MeshNode* aNode = aCoordHelperPtr->GetNode();
@@ -487,8 +568,7 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
       aNodeInfo->SetCoordUnit( iCoord, aCoordHelperPtr->GetUnit(iCoord));
     }
 
-    //cout << " SetNodeInfo(aNodeInfo)" << endl;
-    MESSAGE("Perform - aNodeInfo->GetNbElem() = "<<aNbNodes);
+    //MESSAGE("Perform - aNodeInfo->GetNbElem() = "<<aNbNodes);
     myMed->SetNodeInfo(aNodeInfo);
     aNodeInfo.reset(); // free memory used for arrays
 
@@ -500,8 +580,24 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
     const SMDS_MeshInfo& nbElemInfo = myMesh->GetMeshInfo();
 
     // poly elements are not supported by med-2.1
-    bool polyTypesSupported = myMed->CrPolygoneInfo(aMeshInfo,eMAILLE,ePOLYGONE,0,0);
+    bool polyTypesSupported = ( myMed->CrPolygoneInfo(aMeshInfo,eMAILLE,ePOLYGONE,0,0).get() != 0 );
     TInt nbPolygonNodes = 0, nbPolyhedronNodes = 0, nbPolyhedronFaces = 0;
+
+    // nodes on VERTEXes where 0D elements are absent
+    std::vector<const SMDS_MeshElement*> nodesOf0D;
+    std::vector< SMDS_ElemIteratorPtr > iterVec;
+    SMDS_ElemIteratorPtr iterVecIter;
+    if ( myAddODOnVertices && getNodesOfMissing0DOnVert( myMesh, nodesOf0D ))
+    {
+      iterVec.resize(2);
+      iterVec[0] = myMesh->elementsIterator( SMDSAbs_0DElement );
+      iterVec[1] = SMDS_ElemIteratorPtr
+        ( new SMDS_ElementVectorIterator( nodesOf0D.begin(), nodesOf0D.end() ));
+
+      typedef SMDS_IteratorOnIterators
+        < const SMDS_MeshElement *, std::vector< SMDS_ElemIteratorPtr > > TItIterator;
+      iterVecIter = SMDS_ElemIteratorPtr( new TItIterator( iterVec ));
+    }
 
     // collect info on all geom types
 
@@ -513,34 +609,46 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
 #endif
     aTElemTypeDatas.push_back(TElemTypeData(anEntity,
                                             ePOINT1,
-                                            nbElemInfo.Nb0DElements(),
+                                            nbElemInfo.Nb0DElements() + nodesOf0D.size(),
                                             SMDSAbs_0DElement));
+#ifdef _ELEMENTS_BY_DIM_
+    anEntity = eSTRUCT_ELEMENT;
+#endif
+    aTElemTypeDatas.push_back( TElemTypeData(anEntity,
+                                             eBALL,
+                                             nbElemInfo.NbBalls(),
+                                             SMDSAbs_Ball));
 #ifdef _ELEMENTS_BY_DIM_
     anEntity = eARETE;
 #endif
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eSEG2,
-                                            nbElemInfo.NbEdges( ORDER_LINEAR ),
-                                            SMDSAbs_Edge));
+                                             eSEG2,
+                                             nbElemInfo.NbEdges( ORDER_LINEAR ),
+                                             SMDSAbs_Edge));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eSEG3,
-                                            nbElemInfo.NbEdges( ORDER_QUADRATIC ),
-                                            SMDSAbs_Edge));
+                                             eSEG3,
+                                             nbElemInfo.NbEdges( ORDER_QUADRATIC ),
+                                             SMDSAbs_Edge));
 #ifdef _ELEMENTS_BY_DIM_
     anEntity = eFACE;
 #endif
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eTRIA3,
-                                            nbElemInfo.NbTriangles( ORDER_LINEAR ),
-                                            SMDSAbs_Face));
+                                             eTRIA3,
+                                             nbElemInfo.NbTriangles( ORDER_LINEAR ),
+                                             SMDSAbs_Face));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eTRIA6,
-                                            nbElemInfo.NbTriangles( ORDER_QUADRATIC ),
-                                            SMDSAbs_Face));
+                                             eTRIA6,
+                                             nbElemInfo.NbTriangles( ORDER_QUADRATIC ) -
+                                             nbElemInfo.NbBiQuadTriangles(),
+                                             SMDSAbs_Face));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eQUAD4,
-                                            nbElemInfo.NbQuadrangles( ORDER_LINEAR ),
-                                            SMDSAbs_Face));
+                                             eTRIA7,
+                                             nbElemInfo.NbBiQuadTriangles(),
+                                             SMDSAbs_Face));
+    aTElemTypeDatas.push_back( TElemTypeData(anEntity,
+                                             eQUAD4,
+                                             nbElemInfo.NbQuadrangles( ORDER_LINEAR ),
+                                             SMDSAbs_Face));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
                                              eQUAD8,
                                              nbElemInfo.NbQuadrangles( ORDER_QUADRATIC ) -
@@ -553,37 +661,46 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
     if ( polyTypesSupported ) {
       aTElemTypeDatas.push_back( TElemTypeData(anEntity,
                                                ePOLYGONE,
-                                               nbElemInfo.NbPolygons(),
+                                               nbElemInfo.NbPolygons( ORDER_LINEAR ),
                                                SMDSAbs_Face));
       // we need one more loop on poly elements to count nb of their nodes
       aTElemTypeDatas.push_back( TElemTypeData(anEntity,
                                                ePOLYGONE,
-                                               nbElemInfo.NbPolygons(),
+                                               nbElemInfo.NbPolygons( ORDER_LINEAR ),
+                                               SMDSAbs_Face));
+      aTElemTypeDatas.push_back( TElemTypeData(anEntity,
+                                               ePOLYGON2,
+                                               nbElemInfo.NbPolygons( ORDER_QUADRATIC ),
+                                               SMDSAbs_Face));
+      // we need one more loop on QUAD poly elements to count nb of their nodes
+      aTElemTypeDatas.push_back( TElemTypeData(anEntity,
+                                               ePOLYGON2,
+                                               nbElemInfo.NbPolygons( ORDER_QUADRATIC ),
                                                SMDSAbs_Face));
     }
 #ifdef _ELEMENTS_BY_DIM_
     anEntity = eMAILLE;
 #endif
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eTETRA4,
-                                            nbElemInfo.NbTetras( ORDER_LINEAR ),
-                                            SMDSAbs_Volume));
+                                             eTETRA4,
+                                             nbElemInfo.NbTetras( ORDER_LINEAR ),
+                                             SMDSAbs_Volume));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            eTETRA10,
-                                            nbElemInfo.NbTetras( ORDER_QUADRATIC ),
-                                            SMDSAbs_Volume));
+                                             eTETRA10,
+                                             nbElemInfo.NbTetras( ORDER_QUADRATIC ),
+                                             SMDSAbs_Volume));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            ePYRA5,
-                                            nbElemInfo.NbPyramids( ORDER_LINEAR ),
-                                            SMDSAbs_Volume));
+                                             ePYRA5,
+                                             nbElemInfo.NbPyramids( ORDER_LINEAR ),
+                                             SMDSAbs_Volume));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            ePYRA13,
-                                            nbElemInfo.NbPyramids( ORDER_QUADRATIC ),
-                                            SMDSAbs_Volume));
+                                             ePYRA13,
+                                             nbElemInfo.NbPyramids( ORDER_QUADRATIC ),
+                                             SMDSAbs_Volume));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
-                                            ePENTA6,
-                                            nbElemInfo.NbPrisms( ORDER_LINEAR ),
-                                            SMDSAbs_Volume));
+                                             ePENTA6,
+                                             nbElemInfo.NbPrisms( ORDER_LINEAR ),
+                                             SMDSAbs_Volume));
     aTElemTypeDatas.push_back( TElemTypeData(anEntity,
                                              ePENTA15,
                                              nbElemInfo.NbPrisms( ORDER_QUADRATIC ),
@@ -629,39 +746,36 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
 
       int defaultFamilyId = 0;
       switch ( aElemTypeData->_smdsType ) {
-      case SMDSAbs_0DElement:
-        defaultFamilyId = my0DElementsDefaultFamilyId;
-        break;
-      case SMDSAbs_Edge:
-        defaultFamilyId = myEdgesDefaultFamilyId;
-        break;
-      case SMDSAbs_Face:
-        defaultFamilyId = myFacesDefaultFamilyId;
-        break;
-      case SMDSAbs_Volume:
-        defaultFamilyId = myVolumesDefaultFamilyId;
-        break;
+      case SMDSAbs_0DElement: defaultFamilyId = my0DElementsDefaultFamilyId; break;
+      case SMDSAbs_Ball:      defaultFamilyId = myBallsDefaultFamilyId;      break;
+      case SMDSAbs_Edge:      defaultFamilyId = myEdgesDefaultFamilyId;      break;
+      case SMDSAbs_Face:      defaultFamilyId = myFacesDefaultFamilyId;      break;
+      case SMDSAbs_Volume:    defaultFamilyId = myVolumesDefaultFamilyId;    break;
       default:
         continue;
       }
 
       // iterator on elements of a current type
-      SMDS_ElemIteratorPtr elemIterator = myMesh->elementsIterator( aElemTypeData->_smdsType );
-      if ( !elemIterator->more()) continue;
+      SMDS_ElemIteratorPtr elemIterator;
       int iElem = 0;
 
       // Treat POLYGONs
       // ---------------
-      if ( aElemTypeData->_geomType == ePOLYGONE )
+      if ( aElemTypeData->_geomType == ePOLYGONE ||
+           aElemTypeData->_geomType == ePOLYGON2 )
       {
+        if ( aElemTypeData->_geomType == ePOLYGONE )
+          elemIterator = myMesh->elementEntityIterator( SMDSEntity_Polygon );
+        else
+          elemIterator = myMesh->elementEntityIterator( SMDSEntity_Quad_Polygon );
+
         if ( nbPolygonNodes == 0 ) {
           // Count nb of nodes
-          while ( const SMDS_MeshElement* anElem = elemIterator->next() ) {
-            if ( anElem->IsPoly() ) {
-              nbPolygonNodes += anElem->NbNodes();
-              if ( ++iElem == aElemTypeData->_nbElems )
-                break;
-            }
+          while ( elemIterator->more() ) {
+            const SMDS_MeshElement* anElem = elemIterator->next();
+            nbPolygonNodes += anElem->NbNodes();
+            if ( ++iElem == aElemTypeData->_nbElems )
+              break;
           }
         }
         else {
@@ -676,11 +790,9 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
           TElemNum & index = *(aPolygoneInfo->myIndex.get());
           index[0] = 1;
 
-          while ( const SMDS_MeshElement* anElem = elemIterator->next() )
+          while ( elemIterator->more() )
           {
-            if ( !anElem->IsPoly() )
-              continue;
-
+            const SMDS_MeshElement* anElem = elemIterator->next();
             // index
             TInt aNbNodes = anElem->NbNodes();
             index[ iElem+1 ] = index[ iElem ] + aNbNodes;
@@ -706,24 +818,27 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
               break;
           }
           myMed->SetPolygoneInfo(aPolygoneInfo);
-        }
 
-      } 
+          nbPolygonNodes = 0; // to treat next polygon type
+        }
+      }
 
       // Treat POLYEDREs
       // ----------------
       else if (aElemTypeData->_geomType == ePOLYEDRE )
       {
+        elemIterator = myMesh->elementGeomIterator( SMDSGeom_POLYHEDRA );
+        
         if ( nbPolyhedronNodes == 0 ) {
           // Count nb of nodes
-          while ( const SMDS_MeshElement* anElem = elemIterator->next() ) {
-              const SMDS_VtkVolume *aPolyedre = dynamic_cast<const SMDS_VtkVolume*>(anElem);
-              if ( aPolyedre && aPolyedre->IsPoly()) {
-              nbPolyhedronNodes += aPolyedre->NbNodes();
-              nbPolyhedronFaces += aPolyedre->NbFaces();
-              if ( ++iElem == aElemTypeData->_nbElems )
-                break;
-            }
+          while ( elemIterator->more() ) {
+            const SMDS_MeshElement*  anElem = elemIterator->next();
+            const SMDS_VtkVolume *aPolyedre = dynamic_cast<const SMDS_VtkVolume*>(anElem);
+            if ( !aPolyedre ) continue;
+            nbPolyhedronNodes += aPolyedre->NbNodes();
+            nbPolyhedronFaces += aPolyedre->NbFaces();
+            if ( ++iElem == aElemTypeData->_nbElems )
+              break;
           }
         }
         else {
@@ -744,13 +859,11 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
           faces[0] = 1;
 
           TInt iFace = 0, iNode = 0;
-          while ( const SMDS_MeshElement* anElem = elemIterator->next() )
+          while ( elemIterator->more() )
           {
+            const SMDS_MeshElement*  anElem = elemIterator->next();
             const SMDS_VtkVolume *aPolyedre = dynamic_cast<const SMDS_VtkVolume*>(anElem);
-            if ( !aPolyedre )
-              continue;
-            if ( !aPolyedre->IsPoly() )
-              continue;
+            if ( !aPolyedre ) continue;
             // index
             TInt aNbFaces = aPolyedre->NbFaces();
             index[ iElem+1 ] = index[ iElem ] + aNbFaces;
@@ -785,6 +898,47 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
         }
       } // if (aElemTypeData->_geomType == ePOLYEDRE )
 
+      // Treat BALLs
+      // ----------------
+      else if (aElemTypeData->_geomType == eBALL )
+      {
+        // allocate data arrays
+        PBallInfo aBallInfo = myMed->CrBallInfo( aMeshInfo, aElemTypeData->_nbElems );
+
+        // build map of family numbers for this type
+        if ( !isElemFamMapBuilt[ aElemTypeData->_smdsType ])
+        {
+          fillElemFamilyMap( anElemFamMap, aFamilies, aElemTypeData->_smdsType );
+          isElemFamMapBuilt[ aElemTypeData->_smdsType ] = true;
+        }
+
+        elemIterator = myMesh->elementsIterator( SMDSAbs_Ball );
+        while ( elemIterator->more() )
+        {
+          const SMDS_MeshElement* anElem = elemIterator->next();
+          // connectivity
+          const SMDS_MeshElement* aNode = anElem->GetNode( 0 );
+#ifdef _EDF_NODE_IDS_
+          (*aBallInfo->myConn)[ iElem ] = aNodeIdMap[aNode->GetID()];
+#else
+          (*aBallInfo->myConn)[ iElem ] = aNode->GetID();
+#endif
+          // element number
+          aBallInfo->SetElemNum( iElem, anElem->GetID() );
+
+          // diameter
+          aBallInfo->myDiameters[ iElem ] =
+            static_cast<const SMDS_BallElement*>( anElem )->GetDiameter();
+
+          // family number
+          int famNum = getFamilyId( anElemFamMap, anElem, defaultFamilyId );
+          aBallInfo->SetFamNum( iElem, famNum );
+          ++iElem;
+        }
+        // store data in a file
+        myMed->SetBallInfo(aBallInfo);
+      }
+
       else
       {
         // Treat standard types
@@ -807,8 +961,12 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
         }
 
         TInt aNbNodes = MED::GetNbNodes(aElemTypeData->_geomType);
-        while ( const SMDS_MeshElement* anElem = elemIterator->next() )
+        elemIterator = myMesh->elementsIterator( aElemTypeData->_smdsType );
+        if ( aElemTypeData->_smdsType == SMDSAbs_0DElement && ! nodesOf0D.empty() )
+          elemIterator = iterVecIter;
+        while ( elemIterator->more() )
         {
+          const SMDS_MeshElement* anElem = elemIterator->next();
           if ( anElem->NbNodes() != aNbNodes || anElem->IsPoly() )
             continue; // other geometry
 
@@ -853,4 +1011,32 @@ Driver_Mesh::Status DriverMED_W_SMESHDS_Mesh::Perform()
   myGroups.clear();
   mySubMeshes.clear();
   return aResult;
+}
+
+//================================================================================
+/*!
+ * \brief Returns nodes on VERTEXes where 0D elements are absent
+ */
+//================================================================================
+
+bool DriverMED_W_SMESHDS_Mesh::
+getNodesOfMissing0DOnVert(SMESHDS_Mesh*                         meshDS,
+                          std::vector<const SMDS_MeshElement*>& nodes)
+{
+  nodes.clear();
+  for ( int i = 1; i <= meshDS->MaxShapeIndex(); ++i )
+  {
+    if ( meshDS->IndexToShape( i ).ShapeType() != TopAbs_VERTEX )
+      continue;
+    if ( SMESHDS_SubMesh* sm = meshDS->MeshElements(i) ) {
+      SMDS_NodeIteratorPtr nIt= sm->GetNodes();
+      while (nIt->more())
+      {
+        const SMDS_MeshNode* n = nIt->next();
+        if ( n->NbInverseElements( SMDSAbs_0DElement ) == 0 )
+          nodes.push_back( n );
+      }
+    }
+  }
+  return !nodes.empty();
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2007-2012  CEA/DEN, EDF R&D, OPEN CASCADE
+// Copyright (C) 2007-2016  CEA/DEN, EDF R&D, OPEN CASCADE
 //
 // Copyright (C) 2003-2007  OPEN CASCADE, EADS/CCR, LIP6, CEA/DEN,
 // CEDRAT, EDF R&D, LEG, PRINCIPIA R&D, BUREAU VERITAS
@@ -6,7 +6,7 @@
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
-// version 2.1 of the License.
+// version 2.1 of the License, or (at your option) any later version.
 //
 // This library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,13 +26,16 @@
 //
 #include "Driver_Mesh.h"
 
+#include "SMESH_Comment.hxx"
+
 #include <utilities.h>
 
 using namespace std;
 
 Driver_Mesh::Driver_Mesh():
   myFile(""),
-  myMeshId(-1)
+  myMeshId(-1),
+  myStatus( DRS_OK )
 {}
 
 
@@ -78,5 +81,23 @@ Driver_Mesh::Status Driver_Mesh::addMessage(const std::string& msg,
 #ifdef _DEBUG_
   cout << msg << endl;
 #endif
-  return isFatal ? DRS_FAIL : DRS_WARN_SKIP_ELEM;
+  return ( myStatus = isFatal ? DRS_FAIL : DRS_WARN_SKIP_ELEM );
+}
+
+//================================================================================
+/*!
+ * \brief Return a structure containing description of errors
+ */
+//================================================================================
+
+SMESH_ComputeErrorPtr Driver_Mesh::GetError()
+{
+  SMESH_Comment msg;
+  for ( size_t i = 0; i < myErrorMessages.size(); ++i )
+  {
+    msg << myErrorMessages[i];
+    if ( i+1 < myErrorMessages.size() )
+      msg << "\n";
+  }
+  return SMESH_ComputeError::New( myStatus == DRS_OK ? int(COMPERR_OK) : int(myStatus), msg );
 }
