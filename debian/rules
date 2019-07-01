@@ -9,7 +9,7 @@ override_dh_auto_configure:
 	dh_auto_configure -- \
 	    -DCMAKE_INSTALL_LIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	    -DENABLE_LIB_NAMING=ON \
-	    -DOpenCASCADE_DIR=/usr/lib/cmake/occt
+	    -DOpenCASCADE_DIR=/usr/lib/cmake/opencascade
 
 override_dh_missing-arch:
 	dh_missing --fail-missing
